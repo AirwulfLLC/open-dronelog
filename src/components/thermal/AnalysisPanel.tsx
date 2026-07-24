@@ -14,6 +14,7 @@ import {
 } from '@/lib/thermalPalettes';
 import { CLASSIFICATION_LABELS } from '@/types/thermal';
 import type { AnomalyRegion } from '@/types/thermal';
+import { NetworkPanel } from './NetworkPanel';
 
 const SEVERITY_STYLES: Record<string, string> = {
   low: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
@@ -101,8 +102,13 @@ export function AnalysisPanel() {
 
   if (!analysis || !stats) {
     return (
-      <div className="p-4 text-xs text-gray-500">
-        Select a radiometric image to see temperature analysis.
+      <div className="overflow-y-auto flex-1 min-h-0 text-sm">
+        <div className="p-4 pb-0 text-xs text-gray-500">
+          Select a radiometric image to see temperature analysis.
+        </div>
+        <Section title="Heat Flow Network (Radiation Exchange)">
+          <NetworkPanel />
+        </Section>
       </div>
     );
   }
@@ -361,6 +367,11 @@ export function AnalysisPanel() {
             ))}
           </div>
         )}
+      </Section>
+
+      {/* Heat flow network */}
+      <Section title="Heat Flow Network (Radiation Exchange)">
+        <NetworkPanel />
       </Section>
     </div>
   );

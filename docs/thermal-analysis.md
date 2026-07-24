@@ -92,6 +92,36 @@ When range isolation is active, detection is restricted to the isolated band.
 Findings are drawn on the image and listed in the panel, and can be imported
 into a report with one click.
 
+### Heat flow network (radiation exchange)
+
+A lumped-parameter thermal network solver (SINDA-style) is built into the
+analysis panel for computing radiation exchange between surfaces and
+representing heat flow paths between computation points:
+
+- **Nodes** — place with the **Node** tool; each samples the measured image
+  temperature as its starting value. Three kinds:
+  - *Diffusion*: has thermal mass m·cp (J/K) — implements transient heat
+    diffusion `m·cp·dT/dt = Σq + Q` (the lumped form of
+    `ρcp ∂T/∂t = ∇·(k∇T) + q‴`);
+  - *Arithmetic*: massless, instantaneous heat balance;
+  - *Boundary*: prescribed temperature (ambient is the typical boundary).
+- **Conductors** — drag with the **Link** tool between two nodes:
+  - *Linear*: `q = G·(T₁−T₂)` (Fourier conduction `kA/L`, or convection `hA`);
+  - *Radiative*: `q = σ·εFA·(T₁⁴−T₂⁴)` (radiation exchange; εFA in m²).
+- **Sources** — heater power, electrical dissipation, solar/environmental
+  backloading (W) applied to any non-boundary node.
+- m·cp, conductances, sources and boundary temperatures may be **constant,
+  vary with time, or vary with temperature** (piecewise-linear tables) — i.e.
+  arbitrarily user modified.
+- **Solvers** — steady state (Newton with exact radiative Jacobian) and
+  transient (backward Euler, unconditionally stable). Solutions are validated
+  against analytical cases in the unit tests (RC decay, radiative
+  equilibrium, temperature-dependent conductance).
+- **Results** — heat flow paths drawn on the image as directional arrows
+  scaled by |q| with wattage labels, per-node surface heat balance
+  (`Σq_cond = q_conv + q_rad + q_source` breakdown), and a transient
+  temperature chart. Networks persist per asset and are included in backups.
+
 ### Annotations
 
 Arrow, text, freehand, ellipse and rectangle tools with color selection,

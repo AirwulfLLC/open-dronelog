@@ -106,11 +106,19 @@ export interface TempMatrix {
 
 // ---------------- Annotations ----------------
 
-export type AnnotationTool = 'select' | 'arrow' | 'text' | 'freehand' | 'circle' | 'rect';
+export type AnnotationTool =
+  | 'select'
+  | 'arrow'
+  | 'text'
+  | 'freehand'
+  | 'circle'
+  | 'rect'
+  | 'node'
+  | 'conductor';
 
 export interface AnnotationBase {
   id: string;
-  type: Exclude<AnnotationTool, 'select'>;
+  type: Exclude<AnnotationTool, 'select' | 'node' | 'conductor'>;
   color: string;
   strokeWidth: number;
 }
@@ -158,6 +166,89 @@ export type Annotation =
   | FreehandAnnotation
   | CircleAnnotation
   | RectAnnotation;
+
+// ---------------- Thermal network (heat flow) ----------------
+
+/** Property value: constant, or piecewise-linear vs time (s) or temperature (°C). */
+export interface PropValue {
+  mode: 'constant' | 'timeTable' | 'tempTable';
+  value?: number;
+  points?: Array<[number, number]>;
+}
+
+export type NetNodeKind = 'diffusion' | 'arithmetic' | 'boundary';
+
+export interface NetNode {
+  id: string;
+  label: string;
+  /** Position in image-pixel coordinates. */
+  x: number;
+  y: number;
+  kind: NetNodeKind;
+  initialTempC: number;
+  /** m·cp in J/K (diffusion nodes). */
+  mcp?: PropValue | null;
+  /** Applied source in W (heater, electrical dissipation, solar backloading…). */
+  source?: PropValue | null;
+  /** Prescribed temperature (°C) for boundary nodes. */
+  boundaryTempC?: PropValue | null;
+}
+
+export type NetConductorKind = 'linear' | 'radiative';
+
+export interface NetConductor {
+  id: string;
+  label: string;
+  from: string;
+  to: string;
+  kind: NetConductorKind;
+  /** Linear: G in W/K. Radiative: εFA product in m². */
+  value: PropValue;
+}
+
+export interface ThermalNetworkModel {
+  nodes: NetNode[];
+  conductors: NetConductor[];
+}
+
+export interface NetworkSolveOptions {
+  mode: 'steady' | 'transient';
+  durationS?: number;
+  timeStepS?: number;
+}
+
+export interface ConductorFlow {
+  id: string;
+  from: string;
+  to: string;
+  kind: NetConductorKind;
+  /** W, positive from `from` → `to`. */
+  q: number;
+}
+
+export interface NodeBalance {
+  id: string;
+  linearInW: number;
+  radiativeInW: number;
+  sourceW: number;
+  storageW: number;
+  tempC: number;
+}
+
+export interface NetworkSolveResult {
+  mode: string;
+  converged: boolean;
+  iterations: number;
+  nodeIds: string[];
+  times: number[];
+  /** temps[nodeIndex][timeIndex] in °C. */
+  temps: number[][];
+  flows: ConductorFlow[];
+  balances: NodeBalance[];
+  warning?: string;
+}
+
+export const EMPTY_NETWORK: ThermalNetworkModel = { nodes: [], conductors: [] };
 
 // ---------------- Reports ----------------
 

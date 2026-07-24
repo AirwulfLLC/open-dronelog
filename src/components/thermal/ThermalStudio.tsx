@@ -15,12 +15,14 @@ import { ReportBuilder } from './ReportBuilder';
 import type { AnnotationTool, ThermalAsset } from '@/types/thermal';
 
 const TOOLS: Array<{ key: AnnotationTool; label: string; icon: string; title: string }> = [
-  { key: 'select', label: 'Select', icon: '↖', title: 'Select / move annotations (Del to remove)' },
+  { key: 'select', label: 'Select', icon: '↖', title: 'Select / move annotations and nodes (Del to remove)' },
   { key: 'arrow', label: 'Arrow', icon: '→', title: 'Draw arrow' },
   { key: 'circle', label: 'Circle', icon: '◯', title: 'Draw ellipse' },
   { key: 'rect', label: 'Box', icon: '▭', title: 'Draw rectangle' },
   { key: 'freehand', label: 'Draw', icon: '✎', title: 'Freehand drawing' },
   { key: 'text', label: 'Text', icon: 'T', title: 'Add text label' },
+  { key: 'node', label: 'Node', icon: '⬤', title: 'Place a heat-flow computation node (samples image temperature)' },
+  { key: 'conductor', label: 'Link', icon: '⌁', title: 'Connect two nodes with a conductor (drag node → node)' },
 ];
 
 const ANNOTATION_COLORS = ['#ff3b30', '#ff9f0a', '#ffd60a', '#30d158', '#0a84ff', '#bf5af2', '#ffffff', '#000000'];

@@ -10,9 +10,12 @@ import type {
   AnomalyOptions,
   AnomalyResult,
   MeasureOverrides,
+  NetworkSolveOptions,
+  NetworkSolveResult,
   TempMatrix,
   ThermalAnalysis,
   ThermalAsset,
+  ThermalNetworkModel,
   ThermalReportMeta,
   ThermalSdkStatus,
 } from '@/types/thermal';
@@ -132,6 +135,21 @@ export async function detectAnomalies(
     options: options ?? null,
     overrides: overrides ?? null,
   });
+}
+
+export async function solveThermalNetwork(
+  network: ThermalNetworkModel,
+  options: NetworkSolveOptions,
+): Promise<NetworkSolveResult> {
+  return inv<NetworkSolveResult>('thermal_solve_network', { network, options });
+}
+
+export async function getThermalNetwork(assetId: number): Promise<string | null> {
+  return inv<string | null>('thermal_get_network', { assetId });
+}
+
+export async function setThermalNetwork(assetId: number, network: string): Promise<void> {
+  await inv('thermal_set_network', { assetId, network });
 }
 
 export async function getThermalAnnotations(assetId: number): Promise<string | null> {

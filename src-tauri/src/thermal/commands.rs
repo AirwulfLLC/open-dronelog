@@ -262,6 +262,41 @@ pub async fn thermal_detect_anomalies(
     Ok(analysis::detect_anomalies(&m.temps, m.width, m.height, opts))
 }
 
+// ---------------- Thermal network (heat flow) ----------------
+
+/// Solve a lumped-parameter thermal network (radiation exchange, conduction,
+/// transient diffusion). Pure computation — no database access.
+#[tauri::command]
+pub async fn thermal_solve_network(
+    network: super::network::ThermalNetwork,
+    options: super::network::SolveOptions,
+) -> Result<super::network::SolveResult, String> {
+    // Solving is CPU-bound; keep it off the async runtime's core threads.
+    tauri::async_runtime::spawn_blocking(move || super::network::solve(&network, &options))
+        .await
+        .map_err(|e| format!("Solver task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn thermal_get_network(
+    asset_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let db = state.db_authenticated()?;
+    db.get_thermal_network(asset_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn thermal_set_network(
+    asset_id: i64,
+    network: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db_authenticated()?;
+    db.set_thermal_network(asset_id, &network)
+        .map_err(|e| e.to_string())
+}
+
 // ---------------- Annotations ----------------
 
 #[tauri::command]

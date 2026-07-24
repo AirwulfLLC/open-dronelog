@@ -5,6 +5,7 @@
 //! - `commands`: Tauri commands exposed to the frontend (desktop builds)
 
 pub mod analysis;
+pub mod network;
 pub mod sdk;
 
 #[cfg(feature = "tauri-app")]

@@ -14,7 +14,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useThermalStore } from '@/stores/thermalStore';
 import { formatTemp, renderTempsToImageData } from '@/lib/thermalPalettes';
-import type { Annotation, ThermalAsset } from '@/types/thermal';
+import { NetworkLayer, hitTestConductor, hitTestNode } from './NetworkLayer';
+import type { Annotation, NetNode, ThermalAsset } from '@/types/thermal';
 
 interface Props {
   asset: ThermalAsset;
@@ -52,6 +53,14 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     annotationStrokeWidth,
     setAnnotations,
     setAnnotationTool,
+    network,
+    networkResult,
+    selectedNetElement,
+    setNetwork,
+    addNetNode,
+    addNetConductor,
+    selectNetElement,
+    removeNetElement,
   } = useThermalStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -66,12 +75,23 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
   const [selectedAnnId, setSelectedAnnId] = useState<string | null>(null);
   const [textInput, setTextInput] = useState<{ x: number; y: number; value: string } | null>(null);
   const [imgNatural, setImgNatural] = useState<{ w: number; h: number } | null>(null);
+  const [conductorDraft, setConductorDraft] = useState<{
+    fromId: string;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null>(null);
   const dragRef = useRef<{
-    mode: 'draw' | 'move';
+    mode: 'draw' | 'move' | 'conductor' | 'moveNode';
     startX: number;
     startY: number;
     annId?: string;
     orig?: Annotation;
+    nodeId?: string;
+    nodeOrig?: { x: number; y: number };
+    /** Set once a moveNode drag actually displaces the node. */
+    moved?: boolean;
   } | null>(null);
 
   const isRadiometric = asset.isRadiometric && matrix != null;
@@ -82,6 +102,12 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
   useEffect(() => {
     setImgNatural(null);
   }, [asset.id]);
+
+  // Selections are mutually exclusive; panel-originated network selections
+  // must also drop any annotation selection.
+  useEffect(() => {
+    if (selectedNetElement) setSelectedAnnId(null);
+  }, [selectedNetElement]);
 
   // Native pixel dimensions of the display surface
   const dims = useMemo(() => {
@@ -196,9 +222,30 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
           current.map((a) => (a.id === drag.annId ? moved : a)),
           false,
         );
+      } else if (drag.mode === 'conductor') {
+        setConductorDraft((d) => (d ? { ...d, x2: pt.x, y2: pt.y } : d));
+      } else if (drag.mode === 'moveNode' && drag.nodeId && drag.nodeOrig) {
+        const dx = pt.x - drag.startX;
+        const dy = pt.y - drag.startY;
+        // A plain selection click must not touch the network (it would clear
+        // the solve result and rewrite the DB) — wait for real displacement.
+        if (!drag.moved && Math.hypot(dx, dy) < 1) return;
+        drag.moved = true;
+        const net = useThermalStore.getState().network;
+        setNetwork(
+          {
+            ...net,
+            nodes: net.nodes.map((n) =>
+              n.id === drag.nodeId
+                ? { ...n, x: drag.nodeOrig!.x + dx, y: drag.nodeOrig!.y + dy }
+                : n,
+            ),
+          },
+          false,
+        );
       }
     },
-    [setAnnotations],
+    [setAnnotations, setNetwork],
   );
 
   // ---- Cursor temperature readout ----
@@ -261,7 +308,61 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
         setTextInput({ x: pt.x, y: pt.y, value: '' });
         return;
       }
+      if (annotationTool === 'node') {
+        // Place a heat-flow node, sampling the measured temperature when available
+        const net = useThermalStore.getState().network;
+        let idx = 1;
+        while (net.nodes.some((n) => n.id === `N${idx}`)) idx++;
+        let t0 = 20;
+        if (isRadiometric && matrix) {
+          const px = Math.min(matrix.width - 1, Math.floor(pt.x));
+          const py = Math.min(matrix.height - 1, Math.floor(pt.y));
+          t0 = Math.round(matrix.temps[py * matrix.width + px] * 10) / 10;
+        }
+        const node: NetNode = {
+          id: `N${idx}`,
+          label: '',
+          x: pt.x,
+          y: pt.y,
+          kind: 'diffusion',
+          initialTempC: t0,
+          mcp: { mode: 'constant', value: 100 },
+          source: null,
+          boundaryTempC: null,
+        };
+        addNetNode(node);
+        return;
+      }
+      if (annotationTool === 'conductor') {
+        const hit = hitTestNode(network, pt, dims.w);
+        if (hit) {
+          dragRef.current = { mode: 'conductor', startX: pt.x, startY: pt.y };
+          setConductorDraft({ fromId: hit.id, x1: hit.x, y1: hit.y, x2: pt.x, y2: pt.y });
+        }
+        return;
+      }
       if (annotationTool === 'select') {
+        // Network nodes take precedence, then conductors, then annotations
+        const nodeHit = hitTestNode(network, pt, dims.w);
+        if (nodeHit) {
+          selectNetElement({ type: 'node', id: nodeHit.id });
+          setSelectedAnnId(null);
+          dragRef.current = {
+            mode: 'moveNode',
+            startX: pt.x,
+            startY: pt.y,
+            nodeId: nodeHit.id,
+            nodeOrig: { x: nodeHit.x, y: nodeHit.y },
+          };
+          return;
+        }
+        const condHit = hitTestConductor(network, pt, dims.w);
+        if (condHit) {
+          selectNetElement({ type: 'conductor', id: condHit.id });
+          setSelectedAnnId(null);
+          return;
+        }
+        selectNetElement(null);
         // Hit-test annotations (topmost first)
         const hit = [...annotations].reverse().find((a) => hitTest(a, pt, dims.w / 60));
         setSelectedAnnId(hit?.id ?? null);
@@ -278,7 +379,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
       }
       beginDraw(pt);
     },
-    [annotationTool, annotations, beginDraw, dims, eventToImage],
+    [annotationTool, annotations, beginDraw, dims, eventToImage, isRadiometric, matrix, network, addNetNode, selectNetElement],
   );
 
   const handlePointerUp = useCallback(() => {
@@ -300,22 +401,61 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     } else if (drag.mode === 'move') {
       // Persist the moved annotation (read the live list, not the closure copy)
       setAnnotations(useThermalStore.getState().annotations, true);
+    } else if (drag.mode === 'conductor') {
+      const cd = conductorDraft;
+      setConductorDraft(null);
+      if (cd) {
+        const net = useThermalStore.getState().network;
+        const target = hitTestNode(net, { x: cd.x2, y: cd.y2 }, dims.w);
+        // Parallel conductors between the same pair are legitimate
+        // (e.g. conduction + radiation), so only self-links are rejected.
+        if (target && target.id !== cd.fromId) {
+          let idx = 1;
+          while (net.conductors.some((c) => c.id === `G${idx}`)) idx++;
+          addNetConductor({
+            id: `G${idx}`,
+            label: '',
+            from: cd.fromId,
+            to: target.id,
+            kind: 'linear',
+            value: { mode: 'constant', value: 1 },
+          });
+        }
+      }
+    } else if (drag.mode === 'moveNode') {
+      // Persist the final node position — only if it actually moved
+      if (drag.moved) {
+        setNetwork(useThermalStore.getState().network, true);
+      }
     }
-  }, [draft, setAnnotations]);
+  }, [draft, setAnnotations, conductorDraft, dims.w, addNetConductor, setNetwork]);
 
-  // Delete key removes selection
+  // Delete key removes the selected network element or annotation
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnnId) {
-        const target = e.target as HTMLElement | null;
-        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (selectedNetElement) {
+        removeNetElement(selectedNetElement.type, selectedNetElement.id);
+        return;
+      }
+      if (selectedAnnId) {
         setAnnotations(annotations.filter((a) => a.id !== selectedAnnId));
         setSelectedAnnId(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [annotations, selectedAnnId, setAnnotations]);
+  }, [annotations, selectedAnnId, setAnnotations, selectedNetElement, removeNetElement]);
 
   const commitTextInput = useCallback(() => {
     if (textInput && textInput.value.trim()) {
@@ -508,6 +648,15 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
                 ))}
                 {/* Draft being drawn */}
                 {draft && <AnnotationShape a={draft.annotation} selected={false} />}
+
+                {/* Heat-flow network overlay */}
+                <NetworkLayer
+                  network={network}
+                  result={networkResult}
+                  selected={selectedNetElement}
+                  dims={dims}
+                  conductorDraft={conductorDraft}
+                />
               </svg>
             )}
 

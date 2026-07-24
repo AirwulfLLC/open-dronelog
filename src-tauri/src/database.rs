@@ -413,6 +413,15 @@ impl Database {
             );
 
             -- ============================================================
+            -- THERMAL_NETWORKS TABLE: Heat-flow network model per asset (JSON)
+            -- ============================================================
+            CREATE TABLE IF NOT EXISTS thermal_networks (
+                asset_id        BIGINT PRIMARY KEY,
+                network         VARCHAR NOT NULL,
+                updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- ============================================================
             -- THERMAL_REPORTS TABLE: Saved inspection reports (JSON)
             -- ============================================================
             CREATE TABLE IF NOT EXISTS thermal_reports (
@@ -2739,11 +2748,34 @@ impl Database {
             .map_err(DatabaseError::from)
     }
 
-    /// Delete a thermal asset and its annotations.
+    /// Delete a thermal asset with its annotations and network model.
     pub fn delete_thermal_asset(&self, id: i64) -> Result<(), DatabaseError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM thermal_annotations WHERE asset_id = ?", params![id])?;
+        conn.execute("DELETE FROM thermal_networks WHERE asset_id = ?", params![id])?;
         conn.execute("DELETE FROM thermal_assets WHERE id = ?", params![id])?;
+        Ok(())
+    }
+
+    /// Get the heat-flow network JSON for an asset (None if not saved).
+    pub fn get_thermal_network(&self, asset_id: i64) -> Result<Option<String>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT network FROM thermal_networks WHERE asset_id = ?",
+            params![asset_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(DatabaseError::from)
+    }
+
+    /// Set (insert or replace) the heat-flow network JSON for an asset.
+    pub fn set_thermal_network(&self, asset_id: i64, network: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO thermal_networks (asset_id, network) VALUES (?, ?)",
+            params![asset_id, network],
+        )?;
         Ok(())
     }
 
@@ -3083,7 +3115,7 @@ impl Database {
             settings_path.to_string_lossy()
         ));
         // Export thermal tables (ignore error if empty or doesn't exist)
-        for table in ["thermal_assets", "thermal_annotations", "thermal_reports"] {
+        for table in ["thermal_assets", "thermal_annotations", "thermal_networks", "thermal_reports"] {
             let _ = conn.execute_batch(&format!(
                 "COPY {table} TO '{}' (FORMAT PARQUET, COMPRESSION ZSTD);",
                 temp_dir.join(format!("{table}.parquet")).to_string_lossy()
@@ -3098,7 +3130,7 @@ impl Database {
         let gz = flate2::write::GzEncoder::new(dest_file, flate2::Compression::fast());
         let mut tar = tar::Builder::new(gz);
 
-        for name in &["flights.parquet", "telemetry.parquet", "keychains.parquet", "flight_tags.parquet", "flight_messages.parquet", "equipment_names.parquet", "flight_customizations.parquet", "settings.parquet", "thermal_assets.parquet", "thermal_annotations.parquet", "thermal_reports.parquet"] {
+        for name in &["flights.parquet", "telemetry.parquet", "keychains.parquet", "flight_tags.parquet", "flight_messages.parquet", "equipment_names.parquet", "flight_customizations.parquet", "settings.parquet", "thermal_assets.parquet", "thermal_annotations.parquet", "thermal_networks.parquet", "thermal_reports.parquet"] {
             let file_path = temp_dir.join(name);
             if file_path.exists() {
                 tar.append_path_with_name(&file_path, name)
@@ -3329,7 +3361,7 @@ impl Database {
         }
 
         // --- Restore thermal tables (backward compatible — may not exist in old backups) ---
-        for table in ["thermal_assets", "thermal_annotations", "thermal_reports"] {
+        for table in ["thermal_assets", "thermal_annotations", "thermal_networks", "thermal_reports"] {
             let parquet_path = temp_dir.join(format!("{table}.parquet"));
             if parquet_path.exists() {
                 let _ = conn.execute_batch(&format!(

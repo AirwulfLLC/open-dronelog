@@ -9,11 +9,17 @@ import type {
   AnomalyOptions,
   AnomalyResult,
   MeasureOverrides,
+  NetConductor,
+  NetNode,
+  NetworkSolveOptions,
+  NetworkSolveResult,
   TempMatrix,
   ThermalAnalysis,
   ThermalAsset,
+  ThermalNetworkModel,
   ThermalSdkStatus,
 } from '@/types/thermal';
+import { EMPTY_NETWORK } from '@/types/thermal';
 import * as thermalApi from '@/lib/thermalApi';
 
 interface ThermalState {
@@ -42,6 +48,12 @@ interface ThermalState {
   isImporting: boolean;
   isAnalyzing: boolean;
   error: string | null;
+  /** Heat-flow network model for the selected asset. */
+  network: ThermalNetworkModel;
+  networkResult: NetworkSolveResult | null;
+  isSolving: boolean;
+  /** Element selected for editing in the network panel. */
+  selectedNetElement: { type: 'node' | 'conductor'; id: string } | null;
 
   loadSdkStatus: () => Promise<void>;
   loadAssets: () => Promise<void>;
@@ -58,7 +70,60 @@ interface ThermalState {
   setAnnotationStyle: (color?: string, strokeWidth?: number) => void;
   setAnnotations: (annotations: Annotation[], persist?: boolean) => void;
   clearError: () => void;
+  setNetwork: (network: ThermalNetworkModel, persist?: boolean) => void;
+  addNetNode: (node: NetNode) => void;
+  addNetConductor: (conductor: NetConductor) => void;
+  updateNetNode: (id: string, patch: Partial<NetNode>) => void;
+  updateNetConductor: (id: string, patch: Partial<NetConductor>) => void;
+  removeNetElement: (type: 'node' | 'conductor', id: string) => void;
+  selectNetElement: (sel: { type: 'node' | 'conductor'; id: string } | null) => void;
+  solveNetwork: (options: NetworkSolveOptions) => Promise<void>;
+  clearNetworkResult: () => void;
 }
+
+/**
+ * Debounced, strictly-ordered persister: coalesces rapid edits (per-keystroke)
+ * into one write and chains writes so a slow earlier request can never land
+ * after (and clobber) a newer one.
+ */
+function makeDebouncedPersister(
+  write: (assetId: number, json: string) => Promise<void>,
+  label: string,
+  delayMs = 400,
+) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let chain: Promise<void> = Promise.resolve();
+  let pending: { assetId: number; json: string } | null = null;
+  const flush = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (!pending) return;
+    const p = pending;
+    pending = null;
+    chain = chain
+      .then(() => write(p.assetId, p.json))
+      .catch((e) => console.error(`Failed to persist ${label}:`, e));
+  };
+  return {
+    schedule(assetId: number, json: string) {
+      pending = { assetId, json };
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(flush, delayMs);
+    },
+    flush,
+  };
+}
+
+const annotationsPersister = makeDebouncedPersister(
+  (assetId, json) => thermalApi.setThermalAnnotations(assetId, json),
+  'annotations',
+);
+const networkPersister = makeDebouncedPersister(
+  (assetId, json) => thermalApi.setThermalNetwork(assetId, json),
+  'thermal network',
+);
 
 let currentObjectUrl: string | null = null;
 
@@ -107,6 +172,10 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
   isImporting: false,
   isAnalyzing: false,
   error: null,
+  network: EMPTY_NETWORK,
+  networkResult: null,
+  isSolving: false,
+  selectedNetElement: null,
 
   loadSdkStatus: async () => {
     try {
@@ -161,6 +230,10 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
   selectAsset: async (assetId) => {
     const { selectedAssetId } = get();
     if (assetId === selectedAssetId) return;
+    // Write out any debounced edits for the outgoing asset (the persisters
+    // carry their own assetId, so this is safe after the state switches too).
+    annotationsPersister.flush();
+    networkPersister.flush();
     set({
       selectedAssetId: assetId,
       analysis: null,
@@ -172,6 +245,9 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
       spanHigh: null,
       isothermEnabled: false,
       error: null,
+      network: EMPTY_NETWORK,
+      networkResult: null,
+      selectedNetElement: null,
     });
     if (assetId == null) {
       replaceObjectUrl(null, '');
@@ -200,6 +276,20 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
         }
       } catch {
         // annotations are non-critical
+      }
+
+      // Load persisted heat-flow network
+      try {
+        const netJson = await thermalApi.getThermalNetwork(assetId);
+        if (get().selectedAssetId !== assetId) return;
+        if (netJson) {
+          const parsed = JSON.parse(netJson) as ThermalNetworkModel;
+          if (parsed && Array.isArray(parsed.nodes) && Array.isArray(parsed.conductors)) {
+            set({ network: parsed });
+          }
+        }
+      } catch {
+        // network model is non-critical
       }
 
       // Radiometric analysis
@@ -324,11 +414,91 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
     set({ annotations });
     const assetId = get().selectedAssetId;
     if (persist && assetId != null) {
-      thermalApi
-        .setThermalAnnotations(assetId, JSON.stringify(annotations))
-        .catch((e) => console.error('Failed to persist annotations:', e));
+      annotationsPersister.schedule(assetId, JSON.stringify(annotations));
     }
   },
 
   clearError: () => set({ error: null }),
+
+  setNetwork: (network, persist = true) => {
+    // Any edit invalidates the previous solution
+    set({ network, networkResult: null });
+    const assetId = get().selectedAssetId;
+    if (persist && assetId != null) {
+      networkPersister.schedule(assetId, JSON.stringify(network));
+    }
+  },
+
+  addNetNode: (node) => {
+    const { network, setNetwork } = get();
+    setNetwork({ ...network, nodes: [...network.nodes, node] });
+    set({ selectedNetElement: { type: 'node', id: node.id } });
+  },
+
+  addNetConductor: (conductor) => {
+    const { network, setNetwork } = get();
+    setNetwork({ ...network, conductors: [...network.conductors, conductor] });
+    set({ selectedNetElement: { type: 'conductor', id: conductor.id } });
+  },
+
+  updateNetNode: (id, patch) => {
+    const { network, setNetwork } = get();
+    setNetwork({
+      ...network,
+      nodes: network.nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+    });
+  },
+
+  updateNetConductor: (id, patch) => {
+    const { network, setNetwork } = get();
+    setNetwork({
+      ...network,
+      conductors: network.conductors.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+    });
+  },
+
+  removeNetElement: (type, id) => {
+    const { network, setNetwork, selectedNetElement } = get();
+    if (type === 'node') {
+      setNetwork({
+        nodes: network.nodes.filter((n) => n.id !== id),
+        // Conductors attached to a removed node go with it
+        conductors: network.conductors.filter((c) => c.from !== id && c.to !== id),
+      });
+    } else {
+      setNetwork({ ...network, conductors: network.conductors.filter((c) => c.id !== id) });
+    }
+    if (selectedNetElement?.id === id) set({ selectedNetElement: null });
+  },
+
+  selectNetElement: (sel) => set({ selectedNetElement: sel }),
+
+  solveNetwork: async (options) => {
+    const { network, selectedAssetId } = get();
+    if (network.nodes.length === 0) {
+      set({ error: 'Add nodes to the network before solving.' });
+      return;
+    }
+    set({ isSolving: true, error: null });
+    // Reference equality works as a staleness token: every edit path installs
+    // a freshly constructed network object.
+    const current = () =>
+      get().selectedAssetId === selectedAssetId && get().network === network;
+    try {
+      const result = await thermalApi.solveThermalNetwork(network, options);
+      if (current()) {
+        set({ networkResult: result });
+      }
+    } catch (e) {
+      if (current()) {
+        set({ error: e instanceof Error ? e.message : String(e) });
+      }
+    } finally {
+      if (get().selectedAssetId === selectedAssetId) {
+        set({ isSolving: false });
+      }
+    }
+  },
+
+  clearNetworkResult: () => set({ networkResult: null }),
 }));
