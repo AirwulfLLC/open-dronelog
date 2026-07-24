@@ -382,6 +382,46 @@ impl Database {
                 file_hash       VARCHAR PRIMARY KEY,
                 created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- ============================================================
+            -- THERMAL_ASSETS TABLE: Imported thermal photos/videos
+            -- ============================================================
+            CREATE TABLE IF NOT EXISTS thermal_assets (
+                id              BIGINT PRIMARY KEY,
+                file_name       VARCHAR NOT NULL,
+                stored_path     VARCHAR NOT NULL,
+                file_hash       VARCHAR,
+                asset_type      VARCHAR NOT NULL DEFAULT 'image',  -- 'image' or 'video'
+                is_radiometric  BOOLEAN DEFAULT FALSE,
+                width           INTEGER DEFAULT 0,
+                height          INTEGER DEFAULT 0,
+                gps_lat         DOUBLE,
+                gps_lon         DOUBLE,
+                captured_at     VARCHAR,
+                camera_model    VARCHAR,
+                imported_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                notes           VARCHAR
+            );
+
+            -- ============================================================
+            -- THERMAL_ANNOTATIONS TABLE: Drawing annotations per asset (JSON)
+            -- ============================================================
+            CREATE TABLE IF NOT EXISTS thermal_annotations (
+                asset_id        BIGINT PRIMARY KEY,
+                annotations     VARCHAR NOT NULL,
+                updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- ============================================================
+            -- THERMAL_REPORTS TABLE: Saved inspection reports (JSON)
+            -- ============================================================
+            CREATE TABLE IF NOT EXISTS thermal_reports (
+                id              BIGINT PRIMARY KEY,
+                name            VARCHAR NOT NULL,
+                report_json     VARCHAR NOT NULL,
+                created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
             "#,
         )?;
 
@@ -2600,7 +2640,207 @@ impl Database {
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
             params![key, value],
         )?;
-        
+
+        Ok(())
+    }
+
+    // ================================================================
+    // THERMAL: assets / annotations / reports
+    // ================================================================
+
+    fn thermal_asset_from_row(row: &duckdb::Row) -> Result<crate::thermal::ThermalAsset, duckdb::Error> {
+        Ok(crate::thermal::ThermalAsset {
+            id: row.get(0)?,
+            file_name: row.get(1)?,
+            stored_path: row.get(2)?,
+            file_hash: row.get(3)?,
+            asset_type: row.get(4)?,
+            is_radiometric: row.get(5)?,
+            width: row.get(6)?,
+            height: row.get(7)?,
+            gps_lat: row.get(8)?,
+            gps_lon: row.get(9)?,
+            captured_at: row.get(10)?,
+            camera_model: row.get(11)?,
+            imported_at: row.get(12)?,
+            notes: row.get(13)?,
+        })
+    }
+
+    const THERMAL_ASSET_COLS: &'static str =
+        "id, file_name, stored_path, file_hash, asset_type, is_radiometric, width, height, \
+         gps_lat, gps_lon, captured_at, camera_model, CAST(imported_at AS VARCHAR), notes";
+
+    /// Insert a new thermal asset row.
+    pub fn insert_thermal_asset(&self, a: &crate::thermal::ThermalAsset) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO thermal_assets \
+             (id, file_name, stored_path, file_hash, asset_type, is_radiometric, width, height, \
+              gps_lat, gps_lon, captured_at, camera_model, notes) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                a.id,
+                a.file_name,
+                a.stored_path,
+                a.file_hash,
+                a.asset_type,
+                a.is_radiometric,
+                a.width,
+                a.height,
+                a.gps_lat,
+                a.gps_lon,
+                a.captured_at,
+                a.camera_model,
+                a.notes,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// List all thermal assets, newest first.
+    pub fn list_thermal_assets(&self) -> Result<Vec<crate::thermal::ThermalAsset>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM thermal_assets ORDER BY id DESC",
+            Self::THERMAL_ASSET_COLS
+        ))?;
+        let rows = stmt.query_map([], Self::thermal_asset_from_row)?;
+        let mut assets = Vec::new();
+        for row in rows {
+            assets.push(row?);
+        }
+        Ok(assets)
+    }
+
+    /// Get one thermal asset by id.
+    pub fn get_thermal_asset(&self, id: i64) -> Result<crate::thermal::ThermalAsset, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM thermal_assets WHERE id = ?",
+            Self::THERMAL_ASSET_COLS
+        ))?;
+        stmt.query_row(params![id], Self::thermal_asset_from_row)
+            .map_err(DatabaseError::from)
+    }
+
+    /// Find a thermal asset by file hash (duplicate detection).
+    pub fn find_thermal_asset_by_hash(
+        &self,
+        file_hash: &str,
+    ) -> Result<Option<crate::thermal::ThermalAsset>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM thermal_assets WHERE file_hash = ?",
+            Self::THERMAL_ASSET_COLS
+        ))?;
+        stmt.query_row(params![file_hash], Self::thermal_asset_from_row)
+            .optional()
+            .map_err(DatabaseError::from)
+    }
+
+    /// Delete a thermal asset and its annotations.
+    pub fn delete_thermal_asset(&self, id: i64) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM thermal_annotations WHERE asset_id = ?", params![id])?;
+        conn.execute("DELETE FROM thermal_assets WHERE id = ?", params![id])?;
+        Ok(())
+    }
+
+    /// Update the notes field of a thermal asset.
+    pub fn update_thermal_asset_notes(&self, id: i64, notes: Option<&str>) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE thermal_assets SET notes = ? WHERE id = ?",
+            params![notes, id],
+        )?;
+        Ok(())
+    }
+
+    /// Get the annotations JSON for an asset (None if no annotations saved).
+    pub fn get_thermal_annotations(&self, asset_id: i64) -> Result<Option<String>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT annotations FROM thermal_annotations WHERE asset_id = ?",
+            params![asset_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(DatabaseError::from)
+    }
+
+    /// Set (insert or replace) the annotations JSON for an asset.
+    pub fn set_thermal_annotations(&self, asset_id: i64, annotations: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO thermal_annotations (asset_id, annotations) VALUES (?, ?)",
+            params![asset_id, annotations],
+        )?;
+        Ok(())
+    }
+
+    /// List saved thermal reports: (id, name, created_at, updated_at), newest first.
+    pub fn list_thermal_reports(
+        &self,
+    ) -> Result<Vec<(i64, String, Option<String>, Option<String>)>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, CAST(created_at AS VARCHAR), CAST(updated_at AS VARCHAR) \
+             FROM thermal_reports ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        let mut reports = Vec::new();
+        for row in rows {
+            reports.push(row?);
+        }
+        Ok(reports)
+    }
+
+    /// Get a saved report's JSON body.
+    pub fn get_thermal_report(&self, id: i64) -> Result<String, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT report_json FROM thermal_reports WHERE id = ?",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(DatabaseError::from)
+    }
+
+    /// Save a report: insert when `id` is None, update otherwise. Returns the id.
+    pub fn save_thermal_report(
+        &self,
+        id: Option<i64>,
+        name: &str,
+        report_json: &str,
+    ) -> Result<i64, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        match id {
+            Some(existing) => {
+                conn.execute(
+                    "UPDATE thermal_reports SET name = ?, report_json = ?, updated_at = CURRENT_TIMESTAMP \
+                     WHERE id = ?",
+                    params![name, report_json, existing],
+                )?;
+                Ok(existing)
+            }
+            None => {
+                let new_id = crate::thermal::next_id();
+                conn.execute(
+                    "INSERT INTO thermal_reports (id, name, report_json) VALUES (?, ?, ?)",
+                    params![new_id, name, report_json],
+                )?;
+                Ok(new_id)
+            }
+        }
+    }
+
+    /// Delete a saved report.
+    pub fn delete_thermal_report(&self, id: i64) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM thermal_reports WHERE id = ?", params![id])?;
         Ok(())
     }
 
@@ -2842,6 +3082,13 @@ impl Database {
             "COPY settings TO '{}' (FORMAT PARQUET, COMPRESSION ZSTD);",
             settings_path.to_string_lossy()
         ));
+        // Export thermal tables (ignore error if empty or doesn't exist)
+        for table in ["thermal_assets", "thermal_annotations", "thermal_reports"] {
+            let _ = conn.execute_batch(&format!(
+                "COPY {table} TO '{}' (FORMAT PARQUET, COMPRESSION ZSTD);",
+                temp_dir.join(format!("{table}.parquet")).to_string_lossy()
+            ));
+        }
 
         drop(conn); // release the lock while we tar
 
@@ -2851,7 +3098,7 @@ impl Database {
         let gz = flate2::write::GzEncoder::new(dest_file, flate2::Compression::fast());
         let mut tar = tar::Builder::new(gz);
 
-        for name in &["flights.parquet", "telemetry.parquet", "keychains.parquet", "flight_tags.parquet", "flight_messages.parquet", "equipment_names.parquet", "flight_customizations.parquet", "settings.parquet"] {
+        for name in &["flights.parquet", "telemetry.parquet", "keychains.parquet", "flight_tags.parquet", "flight_messages.parquet", "equipment_names.parquet", "flight_customizations.parquet", "settings.parquet", "thermal_assets.parquet", "thermal_annotations.parquet", "thermal_reports.parquet"] {
             let file_path = temp_dir.join(name);
             if file_path.exists() {
                 tar.append_path_with_name(&file_path, name)
@@ -3081,6 +3328,20 @@ impl Database {
             ));
         }
 
+        // --- Restore thermal tables (backward compatible — may not exist in old backups) ---
+        for table in ["thermal_assets", "thermal_annotations", "thermal_reports"] {
+            let parquet_path = temp_dir.join(format!("{table}.parquet"));
+            if parquet_path.exists() {
+                let _ = conn.execute_batch(&format!(
+                    r#"
+                    INSERT OR REPLACE INTO {table} BY NAME
+                    SELECT * FROM read_parquet('{}');
+                    "#,
+                    parquet_path.to_string_lossy()
+                ));
+            }
+        }
+
         drop(conn);
 
         // Clean up temp dir
@@ -3252,6 +3513,12 @@ pub fn delete_profile(data_dir: &std::path::Path, profile: &str) -> Result<(), S
     let upload_dir = default_upload_folder(data_dir, profile);
     if upload_dir.exists() {
         let _ = fs::remove_dir_all(&upload_dir);
+    }
+
+    // Clean up per-profile thermal asset folder
+    let thermal_dir = crate::thermal::thermal_folder(data_dir, profile);
+    if thermal_dir.exists() {
+        let _ = fs::remove_dir_all(&thermal_dir);
     }
 
     // If this was the active profile, switch back to default

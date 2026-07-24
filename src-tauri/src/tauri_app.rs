@@ -1740,6 +1740,22 @@
                 set_donation_acknowledged,
                 get_setting_value,
                 set_setting_value,
+                crate::thermal::commands::thermal_sdk_status,
+                crate::thermal::commands::thermal_import_asset,
+                crate::thermal::commands::thermal_import_asset_bytes,
+                crate::thermal::commands::thermal_list_assets,
+                crate::thermal::commands::thermal_delete_asset,
+                crate::thermal::commands::thermal_update_asset_notes,
+                crate::thermal::commands::thermal_read_asset_file,
+                crate::thermal::commands::thermal_analyze,
+                crate::thermal::commands::thermal_get_temp_matrix,
+                crate::thermal::commands::thermal_detect_anomalies,
+                crate::thermal::commands::thermal_get_annotations,
+                crate::thermal::commands::thermal_set_annotations,
+                crate::thermal::commands::thermal_list_reports,
+                crate::thermal::commands::thermal_get_report,
+                crate::thermal::commands::thermal_save_report,
+                crate::thermal::commands::thermal_delete_report,
             ])
             .run(tauri::generate_context!())
             .expect("Failed to run Open DroneLog");

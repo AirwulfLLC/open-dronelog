@@ -57,3 +57,8 @@ src-tauri/bindings/
 *.jks.b64
 opendronelog-upload.jks
 opendronelog-upload.jks.b64
+
+# DJI Thermal SDK (proprietary binaries — extracted locally by scripts/setup-thermal-sdk.ps1)
+deps/dji_thermal_sdk/
+dji_thermal_sdk_*.zip
+DJI+Thermal+Analysis+Tool*.exe

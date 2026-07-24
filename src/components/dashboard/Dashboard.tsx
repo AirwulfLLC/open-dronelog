@@ -20,6 +20,7 @@ import { FlightMap } from '@/components/map/FlightMap';
 import { FlightMessagesModal } from './FlightMessagesModal';
 import { Overview } from './Overview';
 import { ProfileSelector } from './ProfileSelector';
+import { ThermalStudio } from '@/components/thermal/ThermalStudio';
 import { isWebMode } from '@/lib/api';
 import { useIsMobileRuntime } from '@/hooks/platform/useIsMobileRuntime';
 
@@ -45,7 +46,7 @@ export function Dashboard() {
   const { t } = useTranslation();
   const [showSettings, setShowSettings] = useState(false);
   const [showMessagesModal, setShowMessagesModal] = useState(false);
-  const [activeView, setActiveView] = useState<'flights' | 'overview'>('overview');
+  const [activeView, setActiveView] = useState<'flights' | 'overview' | 'thermal'>('overview');
   const [topSidebarFlightId, setTopSidebarFlightId] = useState<number | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     if (typeof localStorage !== 'undefined') {
@@ -381,6 +382,21 @@ export function Dashboard() {
               >
                 {t('dashboard.overview')}
               </button>
+              <button
+                onClick={() => {
+                  setActiveView('thermal');
+                  if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                    setIsSidebarHidden(true);
+                  }
+                }}
+                className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${activeView === 'thermal'
+                  ? 'bg-drone-primary/20 border-drone-primary text-white'
+                  : 'border-gray-700 text-gray-400 hover:text-white'
+                  }`}
+                title={t('dashboard.thermal', 'Thermal analysis studio')}
+              >
+                {t('dashboard.thermal', 'Thermal')}
+              </button>
               <ProfileSelector />
             </div>
           </div>
@@ -499,7 +515,7 @@ export function Dashboard() {
           {/* Flight List */}
           <div className="flex-1 min-h-0 flex flex-col">
             <FlightList
-              activeView={activeView}
+              activeView={activeView === 'thermal' ? 'overview' : activeView}
               onTopFlightChange={setTopSidebarFlightId}
               onFiltersExpanded={() => setIsImporterCollapsed(true)}
               onSelectFlight={(flightId) => {
@@ -647,6 +663,10 @@ export function Dashboard() {
               />
               <p className="text-sm" style={{ color: '#64748b' }}>{t('dashboard.loadingFlightData')}</p>
             </div>
+          </div>
+        ) : activeView === 'thermal' ? (
+          <div className="w-full h-full relative">
+            <ThermalStudio />
           </div>
         ) : activeView === 'overview' ? (
           <div className="w-full h-full overflow-auto">
