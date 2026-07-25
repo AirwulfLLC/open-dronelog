@@ -87,6 +87,8 @@ base64 = "0.22"
 
 # Metashape orthomosaic/DEM preview generation (GeoTIFF decode → PNG)
 image = { version = "0.25", default-features = false, features = ["tiff", "png", "jpeg"] }
+# Direct TIFF band access for multispectral orthomosaics (N-band, 16-bit/float)
+tiff = "0.9"
 
 [features]
 default = ["tauri-app"]

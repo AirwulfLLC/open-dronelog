@@ -65,7 +65,8 @@ const inputCls =
 const labelCls = 'block text-[11px] font-medium text-gray-400 mb-1';
 
 export function ReportBuilder({ onClose, exportComposedImage }: Props) {
-  const { assets, selectedAssetId, anomalies, analysis, annotations } = useThermalStore();
+  const { assets, selectedAssetId, anomalies, analysis, annotations, valueSuffix } =
+    useThermalStore();
   const { flights } = useFlightStore();
 
   const [report, setReport] = useState<ThermalReport>({ ...EMPTY_REPORT });
@@ -134,6 +135,9 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
   // ---- Anomalies ----
   const importDetectedAnomalies = () => {
     if (!anomalies || !selectedAsset) return;
+    const isIndex = valueSuffix === '';
+    const unit = isIndex ? '' : ' °C';
+    const dp = isIndex ? 3 : 1;
     const existing = report.anomalies.length;
     const entries: ReportAnomalyEntry[] = anomalies.regions.map((r, i) => ({
       id: nextEntryId(),
@@ -147,10 +151,15 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
       baseline: anomalies.baseline,
       deltaT: r.deltaT,
       severity: r.severity,
-      classification: r.classification,
-      finding: `${r.kind === 'hot' ? 'Hot' : 'Cold'} region (${r.areaPx.toLocaleString()} px) with mean ${r.tMean.toFixed(1)} °C, ${
-        r.deltaT > 0 ? '+' : ''
-      }${r.deltaT.toFixed(1)} °C vs. baseline.`,
+      // Thermal defect classes don't apply to vegetation-index regions
+      classification: isIndex ? 'other' : r.classification,
+      finding: isIndex
+        ? `${r.kind === 'hot' ? 'High' : 'Low'}-index region (${r.areaPx.toLocaleString()} px) with mean ${r.tMean.toFixed(dp)}, ${
+            r.deltaT > 0 ? '+' : ''
+          }${r.deltaT.toFixed(dp)} vs. scene baseline (vegetation index units).`
+        : `${r.kind === 'hot' ? 'Hot' : 'Cold'} region (${r.areaPx.toLocaleString()} px) with mean ${r.tMean.toFixed(dp)}${unit}, ${
+            r.deltaT > 0 ? '+' : ''
+          }${r.deltaT.toFixed(dp)}${unit} vs. baseline.`,
       recommendation: '',
     }));
     update('anomalies', [...report.anomalies, ...entries]);

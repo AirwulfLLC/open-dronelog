@@ -119,18 +119,65 @@ fn import_asset_impl(
     if let Some(kind) = metashape_kind {
         let mut meta = super::metashape::parse_metadata(kind, &bytes);
         if kind == "orthomosaic" {
-            match super::metashape::generate_tiff_preview(&bytes, &folder, &format!("{id}")) {
-                Ok((w, h, preview_name)) => {
-                    width = w as i32;
-                    height = h as i32;
-                    meta["previewFile"] = serde_json::json!(preview_name);
-                    meta["width"] = serde_json::json!(w);
-                    meta["height"] = serde_json::json!(h);
-                    extra_files.push(folder.join(&preview_name));
+            // Multispectral GeoTIFFs (≥4 bands beyond RGBA photos) get a
+            // band-composite preview and expose their planes for index math.
+            // A 4-band file that declares alpha (ExtraSamples) is a photo.
+            let band_count = super::multispectral::probe_band_count(&bytes).unwrap_or(0);
+            let has_alpha = band_count == 4 && super::multispectral::probe_has_alpha(&bytes);
+            let mut handled_as_multispectral = false;
+            if band_count >= 4 && !has_alpha {
+                match super::multispectral::read_bands(&bytes) {
+                    Ok(stack) if !(stack.bands.len() == 4 && stack.bits_per_sample == 8) => {
+                        meta["kind"] = serde_json::json!("multispectral");
+                        meta["bands"] = serde_json::json!(stack.bands.len());
+                        meta["bitsPerSample"] = serde_json::json!(stack.bits_per_sample);
+                        meta["width"] = serde_json::json!(stack.width);
+                        meta["height"] = serde_json::json!(stack.height);
+                        width = stack.width as i32;
+                        height = stack.height as i32;
+                        match super::multispectral::generate_composite_preview(
+                            &stack,
+                            &folder,
+                            &format!("{id}"),
+                        ) {
+                            Ok(preview_name) => {
+                                meta["previewFile"] = serde_json::json!(preview_name);
+                                extra_files.push(folder.join(&preview_name));
+                            }
+                            Err(e) => {
+                                meta["previewError"] = serde_json::json!(e);
+                            }
+                        }
+                        handled_as_multispectral = true;
+                    }
+                    Ok(_) => {} // plain RGBA8 — fall through below
+                    Err(e) => {
+                        // Surface the reason (e.g. planar layout); the plain
+                        // preview attempt below may still succeed and clear it.
+                        meta["previewError"] = serde_json::json!(e);
+                    }
                 }
-                Err(e) => {
-                    // Keep the original; it just won't render in the viewer
-                    meta["previewError"] = serde_json::json!(e);
+            }
+            if !handled_as_multispectral {
+                match super::metashape::generate_tiff_preview(&bytes, &folder, &format!("{id}")) {
+                    Ok((w, h, preview_name)) => {
+                        width = w as i32;
+                        height = h as i32;
+                        meta["previewFile"] = serde_json::json!(preview_name);
+                        meta["width"] = serde_json::json!(w);
+                        meta["height"] = serde_json::json!(h);
+                        extra_files.push(folder.join(&preview_name));
+                        // A band-read failure recorded above no longer matters
+                        meta.as_object_mut().map(|o| o.remove("previewError"));
+                    }
+                    Err(e) => {
+                        // Keep the original; it just won't render in the viewer.
+                        // Prefer the band-read error when both paths failed —
+                        // it is usually the more actionable one.
+                        if meta.get("previewError").is_none() {
+                            meta["previewError"] = serde_json::json!(e);
+                        }
+                    }
                 }
             }
         }
@@ -169,10 +216,55 @@ fn import_asset_impl(
 
 /// Path of an asset's preview file, when its metadata declares one.
 pub(crate) fn preview_path_for(asset: &ThermalAsset) -> Option<std::path::PathBuf> {
+    meta_sibling_path(asset, "previewFile")
+}
+
+/// Path of an asset's raw f32 raster sidecar (vegetation indices).
+pub(crate) fn raster_path_for(asset: &ThermalAsset) -> Option<std::path::PathBuf> {
+    meta_sibling_path(asset, "rasterFile")
+}
+
+fn meta_sibling_path(asset: &ThermalAsset, key: &str) -> Option<std::path::PathBuf> {
     let meta: serde_json::Value = serde_json::from_str(asset.meta_json.as_deref()?).ok()?;
-    let preview = meta["previewFile"].as_str()?;
+    let file = meta[key].as_str()?;
     let dir = std::path::Path::new(&asset.stored_path).parent()?;
-    Some(dir.join(preview))
+    Some(dir.join(file))
+}
+
+/// Per-pixel value matrix for an asset: vegetation-index assets read their
+/// f32 raster sidecar; radiometric images are measured through the SDK.
+fn load_measurement(
+    db: &crate::database::Database,
+    asset_id: i64,
+    overrides: MeasureOverrides,
+) -> Result<(usize, usize, Vec<f32>, sdk::DirpMeasurementParams), String> {
+    let asset = db.get_thermal_asset(asset_id).map_err(|e| e.to_string())?;
+    if let Some(raster_path) = raster_path_for(&asset) {
+        let meta: serde_json::Value =
+            serde_json::from_str(asset.meta_json.as_deref().unwrap_or("{}"))
+                .map_err(|e| format!("Invalid asset metadata: {e}"))?;
+        let (w, h) = (
+            meta["width"].as_u64().unwrap_or(0) as usize,
+            meta["height"].as_u64().unwrap_or(0) as usize,
+        );
+        let bytes = std::fs::read(&raster_path)
+            .map_err(|e| format!("Failed to read index raster: {e}"))?;
+        if w == 0 || h == 0 || bytes.len() != w * h * 4 {
+            return Err("Index raster is corrupt (size mismatch)".to_string());
+        }
+        let values: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        return Ok((w, h, values, sdk::DirpMeasurementParams::default()));
+    }
+    if asset.asset_type != "image" {
+        return Err("Radiometric analysis is only available for images".to_string());
+    }
+    let bytes =
+        std::fs::read(&asset.stored_path).map_err(|e| format!("Failed to read asset file: {e}"))?;
+    let m = sdk::measure(&bytes, overrides)?;
+    Ok((m.width, m.height, m.temps, m.params))
 }
 
 #[tauri::command]
@@ -235,10 +327,13 @@ pub async fn thermal_list_assets(state: State<'_, AppState>) -> Result<Vec<Therm
 pub async fn thermal_delete_asset(asset_id: i64, state: State<'_, AppState>) -> Result<(), String> {
     let db = state.db_authenticated()?;
     let asset = db.get_thermal_asset(asset_id).map_err(|e| e.to_string())?;
-    // Remove the stored file and any preview (best-effort), then the DB rows
+    // Remove the stored file and any sidecars (best-effort), then the DB rows
     let _ = std::fs::remove_file(&asset.stored_path);
     if let Some(preview) = preview_path_for(&asset) {
         let _ = std::fs::remove_file(preview);
+    }
+    if let Some(raster) = raster_path_for(&asset) {
+        let _ = std::fs::remove_file(raster);
     }
     db.delete_thermal_asset(asset_id).map_err(|e| e.to_string())
 }
@@ -298,7 +393,7 @@ fn load_asset_bytes(db: &crate::database::Database, asset_id: i64) -> Result<(Th
     Ok((asset, bytes))
 }
 
-/// Analyze a radiometric image: statistics, histogram, measurement params.
+/// Analyze a radiometric image or index raster: statistics + histogram.
 #[tauri::command]
 pub async fn thermal_analyze(
     asset_id: i64,
@@ -306,20 +401,20 @@ pub async fn thermal_analyze(
     state: State<'_, AppState>,
 ) -> Result<ThermalAnalysis, String> {
     let db = state.db_authenticated()?;
-    let (_asset, bytes) = load_asset_bytes(&db, asset_id)?;
-    let m = sdk::measure(&bytes, overrides.unwrap_or_default())?;
-    let stats = analysis::compute_stats(&m.temps, m.width);
+    let (w, h, values, params) = load_measurement(&db, asset_id, overrides.unwrap_or_default())?;
+    let stats = analysis::compute_stats(&values, w);
     Ok(ThermalAnalysis {
         asset_id,
-        width: m.width as u32,
-        height: m.height as u32,
+        width: w as u32,
+        height: h as u32,
         stats,
-        params: m.params.into(),
+        params: params.into(),
     })
 }
 
-/// Return the full temperature matrix as binary data:
-/// 8-byte header (u32 LE width, u32 LE height) followed by w*h f32 LE values (°C).
+/// Return the full value matrix as binary data:
+/// 8-byte header (u32 LE width, u32 LE height) followed by w*h f32 LE values
+/// (°C for thermal images, index units for vegetation indices).
 #[tauri::command]
 pub async fn thermal_get_temp_matrix(
     asset_id: i64,
@@ -327,19 +422,18 @@ pub async fn thermal_get_temp_matrix(
     state: State<'_, AppState>,
 ) -> Result<tauri::ipc::Response, String> {
     let db = state.db_authenticated()?;
-    let (_asset, bytes) = load_asset_bytes(&db, asset_id)?;
-    let m = sdk::measure(&bytes, overrides.unwrap_or_default())?;
+    let (w, h, values, _params) = load_measurement(&db, asset_id, overrides.unwrap_or_default())?;
 
-    let mut out = Vec::with_capacity(8 + m.temps.len() * 4);
-    out.extend_from_slice(&(m.width as u32).to_le_bytes());
-    out.extend_from_slice(&(m.height as u32).to_le_bytes());
-    for t in &m.temps {
+    let mut out = Vec::with_capacity(8 + values.len() * 4);
+    out.extend_from_slice(&(w as u32).to_le_bytes());
+    out.extend_from_slice(&(h as u32).to_le_bytes());
+    for t in &values {
         out.extend_from_slice(&t.to_le_bytes());
     }
     Ok(tauri::ipc::Response::new(out))
 }
 
-/// Run anomaly detection ("AI analysis") on a radiometric image.
+/// Run anomaly detection ("AI analysis") on a radiometric image or index raster.
 #[tauri::command]
 pub async fn thermal_detect_anomalies(
     asset_id: i64,
@@ -348,8 +442,7 @@ pub async fn thermal_detect_anomalies(
     state: State<'_, AppState>,
 ) -> Result<AnomalyResult, String> {
     let db = state.db_authenticated()?;
-    let (_asset, bytes) = load_asset_bytes(&db, asset_id)?;
-    let m = sdk::measure(&bytes, overrides.unwrap_or_default())?;
+    let (w, h, values, _params) = load_measurement(&db, asset_id, overrides.unwrap_or_default())?;
     let opts = options.unwrap_or(AnomalyOptions {
         z_threshold: None,
         min_region_px: None,
@@ -357,7 +450,132 @@ pub async fn thermal_detect_anomalies(
         range_low: None,
         range_high: None,
     });
-    Ok(analysis::detect_anomalies(&m.temps, m.width, m.height, opts))
+    Ok(analysis::detect_anomalies(&values, w, h, opts))
+}
+
+// ---------------- Vegetation indices ----------------
+
+/// Compute a vegetation index over a multispectral asset and store the
+/// result as a new library asset: a colormapped PNG (viewable/annotatable)
+/// plus a raw f32 raster sidecar that feeds the analysis pipeline
+/// (histogram, range isolation, anomaly detection).
+#[tauri::command]
+pub async fn thermal_compute_index(
+    asset_id: i64,
+    index_name: String,
+    formula: String,
+    band_mapping: std::collections::HashMap<String, usize>,
+    state: State<'_, AppState>,
+) -> Result<ThermalAsset, String> {
+    let db = state.db_authenticated()?;
+    let data_dir = state.data_dir.clone();
+    // Decoding a multi-hundred-MB GeoTIFF and evaluating the formula per
+    // pixel is heavy CPU work — keep it off the async runtime's core threads.
+    tauri::async_runtime::spawn_blocking(move || {
+        compute_index_impl(&db, &data_dir, asset_id, index_name, formula, band_mapping)
+    })
+    .await
+    .map_err(|e| format!("Index computation task failed: {e}"))?
+}
+
+fn compute_index_impl(
+    db: &crate::database::Database,
+    data_dir: &std::path::Path,
+    asset_id: i64,
+    index_name: String,
+    formula: String,
+    band_mapping: std::collections::HashMap<String, usize>,
+) -> Result<ThermalAsset, String> {
+    let source = db.get_thermal_asset(asset_id).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&source.stored_path)
+        .map_err(|e| format!("Failed to read source asset: {e}"))?;
+
+    // Uppercase the mapping keys so formula variables match case-insensitively
+    let vars: std::collections::HashMap<String, usize> = band_mapping
+        .into_iter()
+        .map(|(k, v)| (k.to_ascii_uppercase(), v))
+        .collect();
+    if vars.is_empty() {
+        return Err("Map at least one band before computing an index".to_string());
+    }
+
+    let stack = super::multispectral::read_bands(&bytes)?;
+    for (name, &band) in &vars {
+        if band >= stack.bands.len() {
+            return Err(format!(
+                "Band {} mapped to '{name}' does not exist (raster has {} bands)",
+                band + 1,
+                stack.bands.len()
+            ));
+        }
+    }
+    let expr = super::multispectral::parse_formula(&formula, &vars)?;
+    let raster = super::multispectral::compute_index(&stack, &expr);
+    let render = super::multispectral::render_index(&raster, stack.width, stack.height)?;
+
+    // Store: colormapped PNG as the asset file + f32 sidecar raster
+    let profile = database::get_active_profile(data_dir);
+    let folder = super::thermal_folder(data_dir, &profile);
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Failed to create thermal folder: {e}"))?;
+
+    let id = super::next_id();
+    let file_name = sanitize_file_name(&format!("{index_name}.png"));
+    let stored_path = folder.join(format!("{id}_{file_name}"));
+    render
+        .png
+        .save_with_format(&stored_path, image::ImageFormat::Png)
+        .map_err(|e| format!("Failed to write index image: {e}"))?;
+
+    let raster_name = format!("{id}_raster.f32");
+    let raster_path = folder.join(&raster_name);
+    let mut raw = Vec::with_capacity(raster.len() * 4);
+    for v in &raster {
+        raw.extend_from_slice(&v.to_le_bytes());
+    }
+    if let Err(e) = std::fs::write(&raster_path, &raw) {
+        let _ = std::fs::remove_file(&stored_path);
+        return Err(format!("Failed to write index raster: {e}"));
+    }
+
+    let file_hash = sha256_hex(&raw);
+    let meta = serde_json::json!({
+        "kind": "vegetation_index",
+        "indexName": index_name,
+        "formula": formula,
+        "bandMapping": vars,
+        "sourceAssetId": asset_id,
+        "width": stack.width,
+        "height": stack.height,
+        "rasterFile": raster_name,
+        "stats": { "min": render.min, "max": render.max, "mean": render.mean },
+        "displayRange": { "low": render.range.0, "high": render.range.1 },
+    });
+
+    let asset = ThermalAsset {
+        id,
+        file_name,
+        stored_path: stored_path.to_string_lossy().to_string(),
+        file_hash: Some(file_hash),
+        asset_type: "image".to_string(),
+        // The analysis pipeline treats index rasters like measurements
+        is_radiometric: true,
+        width: stack.width as i32,
+        height: stack.height as i32,
+        gps_lat: source.gps_lat,
+        gps_lon: source.gps_lon,
+        captured_at: source.captured_at.clone(),
+        camera_model: source.camera_model.clone(),
+        imported_at: None,
+        notes: None,
+        source: "metashape".to_string(),
+        meta_json: Some(meta.to_string()),
+    };
+    if let Err(e) = db.insert_thermal_asset(&asset) {
+        let _ = std::fs::remove_file(&stored_path);
+        let _ = std::fs::remove_file(&raster_path);
+        return Err(e.to_string());
+    }
+    db.get_thermal_asset(id).map_err(|e| e.to_string())
 }
 
 // ---------------- Thermal network (heat flow) ----------------

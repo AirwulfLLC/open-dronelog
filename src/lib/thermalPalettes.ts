@@ -78,6 +78,16 @@ export const PALETTES: PaletteDef[] = [
       [1.0, 255, 0, 60],
     ],
   },
+  {
+    // Classic red→yellow→green ramp for vegetation indices (NDVI et al.)
+    key: 'vegetation',
+    label: 'Vegetation',
+    stops: [
+      [0.0, 165, 0, 38],
+      [0.5, 255, 255, 191],
+      [1.0, 0, 104, 55],
+    ],
+  },
 ];
 
 const lutCache = new Map<string, Uint8ClampedArray>();
@@ -226,8 +236,9 @@ export function drawColorBar(canvas: HTMLCanvasElement, paletteKey: string): voi
   ctx.putImageData(img, 0, 0);
 }
 
-export function formatTemp(t: number | null | undefined, unit: 'C' | 'F' = 'C'): string {
+/** Format a measured value with a unit suffix ('°C' default; '' for
+ *  unitless vegetation indices, shown with more precision). */
+export function formatTemp(t: number | null | undefined, suffix: string = '°C'): string {
   if (t == null || Number.isNaN(t)) return '—';
-  const v = unit === 'F' ? t * 1.8 + 32 : t;
-  return `${v.toFixed(1)}°${unit}`;
+  return `${t.toFixed(suffix === '' ? 3 : 1)}${suffix}`;
 }

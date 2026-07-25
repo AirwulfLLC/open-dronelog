@@ -154,12 +154,32 @@ the same per-profile library alongside thermal media:
 
 | File | Handling |
 |---|---|
-| `.tif` / `.tiff` (orthomosaic, DEM) | A PNG preview (max 4096 px) is generated so the GeoTIFF can be viewed and annotated in the studio; the original is kept untouched. |
+| `.tif` / `.tiff` (orthomosaic, DEM) | A PNG preview (max 4096 px) is generated so the GeoTIFF can be viewed and annotated in the studio; the original is kept untouched. 16-bit and float DEMs are min–max normalized. |
+| `.tif` / `.tiff` (multispectral, ≥4 bands) | Detected automatically (DJI Mavic 3M / P4 Multispectral, MicaSense RedEdge/Altum…). An RGB band composite preview is generated, and the per-band planes feed the vegetation-index calculator below. |
 | `.pdf` (processing report) | Stored with a metadata card; opens in the system PDF viewer. |
 | `.xml` (camera calibration) | Camera/marker counts and the coordinate system are parsed for display. |
 | `.csv` (camera reference) | Row/column counts parsed. |
 | `.las` / `.laz` / `.ply` / `.obj` (point clouds, models) | Stored; opens in the system default application. |
 | `.kml` / `.kmz` (map overlays) | Stored. |
+
+### Vegetation indices (NDVI and user-defined)
+
+Selecting a multispectral asset shows a **Vegetation Index** section in the
+analysis panel:
+
+- **Band mapping** — assign each band its spectral role (Blue, Green, Red,
+  RedEdge, NIR, Thermal). Sensible defaults are pre-filled by band count
+  (4-band → Mavic 3M layout, 5-band → P4M/RedEdge, 6-band → Altum).
+- **Presets** — NDVI, GNDVI, NDRE, SAVI, VARI — or a **user-defined formula**
+  over the mapped band variables with `+ − × ÷`, parentheses, and constants
+  (e.g. `(NIR - R) / (NIR + R)`). Division by zero becomes nodata.
+- **Compute** renders the index with the classic red→yellow→green ramp and
+  stores it as a **new asset**: a colormapped PNG plus the raw index raster.
+  Index assets get the *full analysis pipeline* — value statistics and
+  histogram, cursor readout, **range isolation** (e.g. isolate stressed
+  vegetation below NDVI 0.3), anomaly-region detection, annotations, report
+  embedding, and bundle export. Values display unitless with 3-decimal
+  precision, and the viewer defaults to the Vegetation palette.
 
 ### Linked DJI flights and inspection bundles
 

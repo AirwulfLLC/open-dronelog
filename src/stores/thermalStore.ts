@@ -19,7 +19,7 @@ import type {
   ThermalNetworkModel,
   ThermalSdkStatus,
 } from '@/types/thermal';
-import { EMPTY_NETWORK, hasDisplayableImage } from '@/types/thermal';
+import { EMPTY_NETWORK, hasDisplayableImage, valueSuffixFor } from '@/types/thermal';
 import * as thermalApi from '@/lib/thermalApi';
 
 interface ThermalState {
@@ -54,6 +54,8 @@ interface ThermalState {
   isSolving: boolean;
   /** Element selected for editing in the network panel. */
   selectedNetElement: { type: 'node' | 'conductor'; id: string } | null;
+  /** Unit suffix for measured values ('°C', or '' for vegetation indices). */
+  valueSuffix: string;
 
   loadSdkStatus: () => Promise<void>;
   loadAssets: () => Promise<void>;
@@ -176,6 +178,7 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
   networkResult: null,
   isSolving: false,
   selectedNetElement: null,
+  valueSuffix: '°C',
 
   loadSdkStatus: async () => {
     try {
@@ -259,7 +262,18 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
     const asset = get().assets.find((a) => a.id === assetId);
     if (!asset) return;
 
-    set({ isAnalyzing: true });
+    // Vegetation indices are unitless and read best on the red→green ramp
+    const suffix = valueSuffixFor(asset);
+    const isIndex = suffix === '';
+    set({
+      isAnalyzing: true,
+      valueSuffix: suffix,
+      paletteKey: isIndex
+        ? 'vegetation'
+        : get().paletteKey === 'vegetation'
+          ? 'iron'
+          : get().paletteKey,
+    });
     try {
       // Load the displayable file. Images go through the preview endpoint so
       // GeoTIFF orthomosaics render via their generated PNG preview;

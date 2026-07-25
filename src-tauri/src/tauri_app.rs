@@ -1754,6 +1754,7 @@
                 crate::thermal::commands::thermal_analyze,
                 crate::thermal::commands::thermal_get_temp_matrix,
                 crate::thermal::commands::thermal_detect_anomalies,
+                crate::thermal::commands::thermal_compute_index,
                 crate::thermal::commands::thermal_ai_get_config,
                 crate::thermal::commands::thermal_ai_set_provider,
                 crate::thermal::commands::thermal_ai_has_api_key,

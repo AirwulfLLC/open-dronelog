@@ -27,6 +27,8 @@ export interface ThermalAsset {
 export interface MetashapeMeta {
   kind:
     | 'orthomosaic'
+    | 'multispectral'
+    | 'vegetation_index'
     | 'processing_report'
     | 'cameras_xml'
     | 'reference_csv'
@@ -43,10 +45,23 @@ export interface MetashapeMeta {
   rowCount?: number;
   columns?: number;
   format?: string;
+  /** Multispectral: number of spectral bands. */
+  bands?: number;
+  bitsPerSample?: number;
+  /** Vegetation index assets. */
+  indexName?: string;
+  formula?: string;
+  bandMapping?: Record<string, number>;
+  sourceAssetId?: number;
+  rasterFile?: string;
+  stats?: { min: number; max: number; mean: number };
+  displayRange?: { low: number; high: number };
 }
 
 export const METASHAPE_KIND_LABELS: Record<string, string> = {
   orthomosaic: 'Orthomosaic / DEM (GeoTIFF)',
+  multispectral: 'Multispectral Orthomosaic',
+  vegetation_index: 'Vegetation Index',
   processing_report: 'Processing Report (PDF)',
   cameras_xml: 'Camera Calibration (XML)',
   reference_csv: 'Camera Reference (CSV)',
@@ -64,12 +79,24 @@ export function parseMetashapeMeta(asset: ThermalAsset): MetashapeMeta | null {
 }
 
 /** True when the asset can be rendered as an image in the viewer/reports.
- *  Metashape GeoTIFFs are only displayable via their generated PNG preview —
- *  when preview generation failed, treat them as documents. */
+ *  GeoTIFF-backed kinds are only displayable via their generated PNG preview —
+ *  when preview generation failed, treat them as documents. Vegetation index
+ *  assets are stored as PNGs, so they always display. */
 export function hasDisplayableImage(asset: ThermalAsset): boolean {
   if (asset.assetType !== 'image') return false;
   if (asset.source !== 'metashape') return true;
-  return !!parseMetashapeMeta(asset)?.previewFile;
+  const meta = parseMetashapeMeta(asset);
+  if (!meta) return false;
+  if (meta.kind === 'orthomosaic' || meta.kind === 'multispectral') {
+    return !!meta.previewFile;
+  }
+  return true;
+}
+
+/** Unit suffix for measured values on this asset ('' for unitless indices). */
+export function valueSuffixFor(asset: ThermalAsset | null): string {
+  if (!asset) return '°C';
+  return parseMetashapeMeta(asset)?.kind === 'vegetation_index' ? '' : '°C';
 }
 
 export interface ThermalSdkStatus {

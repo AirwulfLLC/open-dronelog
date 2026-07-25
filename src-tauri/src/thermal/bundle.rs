@@ -32,6 +32,9 @@ struct BundleAssetEntry {
     archive_file: String,
     /// Path of the preview PNG inside the archive, when one exists.
     preview_file: Option<String>,
+    /// Path of the f32 raster sidecar (vegetation indices), when one exists.
+    #[serde(default)]
+    raster_file: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -96,7 +99,8 @@ pub async fn thermal_export_bundle(
 
     // Collect asset entries (deduplicated, missing ones skipped with a note)
     let mut seen = std::collections::HashSet::new();
-    let mut entries: Vec<(BundleAssetEntry, PathBuf, Option<PathBuf>)> = Vec::new();
+    let mut entries: Vec<(BundleAssetEntry, PathBuf, Option<PathBuf>, Option<PathBuf>)> =
+        Vec::new();
     for id in asset_ids {
         if !seen.insert(id) {
             continue;
@@ -115,6 +119,11 @@ pub async fn thermal_export_bundle(
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| format!("assets/{}", n.to_string_lossy()));
+        let raster_src = super::commands::raster_path_for(&asset).filter(|p| p.exists());
+        let raster_file = raster_src
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| format!("assets/{}", n.to_string_lossy()));
         let annotations = db.get_thermal_annotations(id).ok().flatten();
         let network = db.get_thermal_network(id).ok().flatten();
         entries.push((
@@ -124,9 +133,11 @@ pub async fn thermal_export_bundle(
                 network,
                 archive_file,
                 preview_file,
+                raster_file,
             },
             src,
             preview_src,
+            raster_src,
         ));
     }
 
@@ -148,7 +159,7 @@ pub async fn thermal_export_bundle(
         name,
         report_name,
         report_json,
-        assets: entries.iter().map(|(e, _, _)| e).map(clone_entry).collect(),
+        assets: entries.iter().map(|(e, _, _, _)| e).map(clone_entry).collect(),
         flight_count: flights.len(),
     };
 
@@ -169,12 +180,16 @@ pub async fn thermal_export_bundle(
             .map_err(|e| format!("Failed to serialize flight data: {e}"))?;
         tar_append_bytes(&mut tar, "flights_full.json", &flights_bytes)?;
 
-        for (entry, src, preview_src) in &entries {
+        for (entry, src, preview_src, raster_src) in &entries {
             tar.append_path_with_name(src, &entry.archive_file)
                 .map_err(|e| format!("Failed to add {} to bundle: {e}", entry.asset.file_name))?;
             if let (Some(p_src), Some(p_name)) = (preview_src, &entry.preview_file) {
                 tar.append_path_with_name(p_src, p_name)
                     .map_err(|e| format!("Failed to add preview to bundle: {e}"))?;
+            }
+            if let (Some(r_src), Some(r_name)) = (raster_src, &entry.raster_file) {
+                tar.append_path_with_name(r_src, r_name)
+                    .map_err(|e| format!("Failed to add index raster to bundle: {e}"))?;
             }
         }
 
@@ -199,6 +214,7 @@ fn clone_entry(e: &BundleAssetEntry) -> BundleAssetEntry {
         network: e.network.clone(),
         archive_file: e.archive_file.clone(),
         preview_file: e.preview_file.clone(),
+        raster_file: e.raster_file.clone(),
     }
 }
 
@@ -376,42 +392,66 @@ pub async fn thermal_import_bundle(
                 continue;
             }
 
-            // Strip any stale preview reference; re-add only after the
-            // preview file has actually been placed.
+            // Strip stale sidecar references; re-add each only after its
+            // file has actually been placed.
             let mut meta_json = entry.asset.meta_json.clone().map(|json| {
                 match serde_json::from_str::<serde_json::Value>(&json) {
                     Ok(mut meta) => {
-                        if meta.get("previewFile").is_some() {
-                            meta.as_object_mut().map(|o| o.remove("previewFile"));
+                        if let Some(o) = meta.as_object_mut() {
+                            o.remove("previewFile");
+                            o.remove("rasterFile");
                         }
                         meta.to_string()
                     }
                     Err(_) => json,
                 }
             });
-            if let Some(preview_archive) = &entry.preview_file {
-                if let Some(preview_base) = Path::new(preview_archive)
+            let place_sidecar = |archive_name: &Option<String>,
+                                 dest_name: String,
+                                 meta_key: &str,
+                                 meta_json: &mut Option<String>|
+             -> bool {
+                let Some(archive) = archive_name else { return false };
+                let Some(base) = Path::new(archive)
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
+                else {
+                    return false;
+                };
+                let extracted = tmp_dir.join(&base);
+                if extracted.exists()
+                    && std::fs::rename(&extracted, folder.join(&dest_name)).is_ok()
                 {
-                    let extracted_preview = tmp_dir.join(&preview_base);
-                    if extracted_preview.exists() {
-                        let new_preview = format!("{new_id}_preview.png");
-                        if std::fs::rename(&extracted_preview, folder.join(&new_preview)).is_ok() {
-                            if let Some(json) = &meta_json {
-                                if let Ok(mut meta) =
-                                    serde_json::from_str::<serde_json::Value>(json)
-                                {
-                                    meta["previewFile"] = serde_json::json!(new_preview);
-                                    meta_json = Some(meta.to_string());
-                                }
-                            }
+                    if let Some(json) = meta_json.as_ref() {
+                        if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(json) {
+                            meta[meta_key] = serde_json::json!(dest_name);
+                            *meta_json = Some(meta.to_string());
                         }
                     }
+                    true
+                } else {
+                    false
                 }
-            }
+            };
+            place_sidecar(
+                &entry.preview_file,
+                format!("{new_id}_preview.png"),
+                "previewFile",
+                &mut meta_json,
+            );
+            let raster_placed = place_sidecar(
+                &entry.raster_file,
+                format!("{new_id}_raster.f32"),
+                "rasterFile",
+                &mut meta_json,
+            );
 
             let mut asset = entry.asset.clone();
+            // An index asset without its raster can't feed the analysis
+            // pipeline — don't advertise it as measurable.
+            if entry.raster_file.is_some() && !raster_placed {
+                asset.is_radiometric = false;
+            }
             asset.id = new_id;
             asset.file_name = safe_name;
             asset.stored_path = stored_path.to_string_lossy().to_string();

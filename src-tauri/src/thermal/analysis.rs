@@ -71,7 +71,8 @@ pub struct AnomalyResult {
 
 const HISTOGRAM_BINS: usize = 96;
 
-/// Compute summary statistics + histogram for a temperature matrix.
+/// Compute summary statistics + histogram for a value matrix.
+/// Non-finite values (index nodata, division-by-zero pixels) are ignored.
 pub fn compute_stats(temps: &[f32], width: usize) -> TempStats {
     debug_assert!(!temps.is_empty());
     let mut min = f32::INFINITY;
@@ -79,7 +80,11 @@ pub fn compute_stats(temps: &[f32], width: usize) -> TempStats {
     let mut min_idx = 0usize;
     let mut max_idx = 0usize;
     let mut sum = 0f64;
+    let mut valid = 0u64;
     for (i, &t) in temps.iter().enumerate() {
+        if !t.is_finite() {
+            continue;
+        }
         if t < min {
             min = t;
             min_idx = i;
@@ -89,12 +94,29 @@ pub fn compute_stats(temps: &[f32], width: usize) -> TempStats {
             max_idx = i;
         }
         sum += t as f64;
+        valid += 1;
     }
-    let n = temps.len() as f64;
+    if valid == 0 {
+        // Degenerate all-nodata raster — return zeros rather than NaN soup
+        return TempStats {
+            min: 0.0,
+            max: 0.0,
+            mean: 0.0,
+            median: 0.0,
+            std_dev: 0.0,
+            min_pos: (0, 0),
+            max_pos: (0, 0),
+            histogram: Vec::new(),
+        };
+    }
+    let n = valid as f64;
     let mean = (sum / n) as f32;
 
     let mut var = 0f64;
     for &t in temps {
+        if !t.is_finite() {
+            continue;
+        }
         let d = t as f64 - mean as f64;
         var += d * d;
     }
@@ -103,14 +125,26 @@ pub fn compute_stats(temps: &[f32], width: usize) -> TempStats {
     // Median via partial sort of a sample (full sort is fine at 327k px, but
     // sampling keeps it fast for larger sensors).
     let stride = (temps.len() / 65_536).max(1);
-    let mut sample: Vec<f32> = temps.iter().step_by(stride).copied().collect();
-    sample.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = sample[sample.len() / 2];
+    let mut sample: Vec<f32> = temps
+        .iter()
+        .step_by(stride)
+        .copied()
+        .filter(|v| v.is_finite())
+        .collect();
+    let median = if sample.is_empty() {
+        mean
+    } else {
+        sample.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sample[sample.len() / 2]
+    };
 
-    // Histogram
+    // Histogram (finite values only)
     let span = (max - min).max(0.1);
     let mut bins = vec![0u32; HISTOGRAM_BINS];
     for &t in temps {
+        if !t.is_finite() {
+            continue;
+        }
         let idx = (((t - min) / span) * (HISTOGRAM_BINS as f32 - 1.0)) as usize;
         bins[idx.min(HISTOGRAM_BINS - 1)] += 1;
     }
@@ -208,10 +242,11 @@ pub fn detect_anomalies(
         true
     };
 
-    // Label: 0 = normal, 1 = hot anomaly, 2 = cold anomaly
+    // Label: 0 = normal, 1 = hot anomaly, 2 = cold anomaly.
+    // Non-finite values (nodata) are never anomalous.
     let mut mask = vec![0u8; temps.len()];
     for (i, &t) in temps.iter().enumerate() {
-        if !in_range(t) {
+        if !t.is_finite() || !in_range(t) {
             continue;
         }
         let z = (t - baseline) / std_dev;
@@ -402,5 +437,44 @@ mod tests {
         assert!((s.mean - 25.0).abs() < 0.001);
         assert_eq!(s.min_pos, (0, 0));
         assert_eq!(s.max_pos, (1, 1));
+    }
+
+    #[test]
+    fn stats_ignore_nan_nodata() {
+        // Index rasters mark nodata as NaN — it must not poison anything
+        let temps = vec![f32::NAN, 0.2, 0.8, f32::NAN, 0.5, f32::NAN];
+        let s = compute_stats(&temps, 3);
+        assert_eq!(s.min, 0.2);
+        assert_eq!(s.max, 0.8);
+        assert!((s.mean - 0.5).abs() < 1e-6);
+        assert!(s.std_dev.is_finite());
+        assert!(s.histogram.iter().map(|b| b.count).sum::<u32>() == 3);
+
+        let r = detect_anomalies(
+            &temps,
+            3,
+            2,
+            AnomalyOptions {
+                z_threshold: Some(1.0),
+                min_region_px: Some(1),
+                max_regions: None,
+                range_low: None,
+                range_high: None,
+            },
+        );
+        assert!(r.baseline.is_finite());
+        // NaN pixels never form anomaly regions
+        for reg in &r.regions {
+            assert!(reg.t_mean.is_finite());
+        }
+    }
+
+    #[test]
+    fn stats_all_nan_degenerates_cleanly() {
+        let temps = vec![f32::NAN; 8];
+        let s = compute_stats(&temps, 4);
+        assert_eq!(s.min, 0.0);
+        assert_eq!(s.max, 0.0);
+        assert!(s.histogram.is_empty());
     }
 }

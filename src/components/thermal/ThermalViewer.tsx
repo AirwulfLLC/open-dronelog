@@ -61,6 +61,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     addNetConductor,
     selectNetElement,
     removeNetElement,
+    valueSuffix,
   } = useThermalStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -309,15 +310,20 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
         return;
       }
       if (annotationTool === 'node') {
-        // Place a heat-flow node, sampling the measured temperature when available
+        // Place a heat-flow node, sampling the measured temperature when
+        // available. Vegetation-index values are NOT temperatures — nodes on
+        // index assets seed with a neutral default instead.
         const net = useThermalStore.getState().network;
         let idx = 1;
         while (net.nodes.some((n) => n.id === `N${idx}`)) idx++;
         let t0 = 20;
-        if (isRadiometric && matrix) {
+        if (isRadiometric && matrix && valueSuffix !== '') {
           const px = Math.min(matrix.width - 1, Math.floor(pt.x));
           const py = Math.min(matrix.height - 1, Math.floor(pt.y));
-          t0 = Math.round(matrix.temps[py * matrix.width + px] * 10) / 10;
+          const sampled = matrix.temps[py * matrix.width + px];
+          if (Number.isFinite(sampled)) {
+            t0 = Math.round(sampled * 10) / 10;
+          }
         }
         const node: NetNode = {
           id: `N${idx}`,
@@ -379,7 +385,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
       }
       beginDraw(pt);
     },
-    [annotationTool, annotations, beginDraw, dims, eventToImage, isRadiometric, matrix, network, addNetNode, selectNetElement],
+    [annotationTool, annotations, beginDraw, dims, eventToImage, isRadiometric, matrix, network, addNetNode, selectNetElement, valueSuffix],
   );
 
   const handlePointerUp = useCallback(() => {
@@ -600,14 +606,14 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
                       x={stats.maxPos[0]}
                       y={stats.maxPos[1]}
                       color="#ff453a"
-                      label={formatTemp(stats.max)}
+                      label={formatTemp(stats.max, valueSuffix)}
                       dims={dims}
                     />
                     <Marker
                       x={stats.minPos[0]}
                       y={stats.minPos[1]}
                       color="#0a84ff"
-                      label={formatTemp(stats.min)}
+                      label={formatTemp(stats.min, valueSuffix)}
                       dims={dims}
                     />
                   </>
@@ -637,7 +643,8 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
                       strokeWidth={Math.max(2, dims.w / 300)}
                     >
                       #{r.id} {r.deltaT > 0 ? '+' : ''}
-                      {r.deltaT.toFixed(1)}°
+                      {r.deltaT.toFixed(valueSuffix === '' ? 3 : 1)}
+                      {valueSuffix === '' ? '' : '°'}
                     </text>
                   </g>
                 ))}
@@ -685,7 +692,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
         {/* Cursor readout */}
         {cursorInfo && (
           <div className="absolute bottom-3 left-3 px-2.5 py-1.5 rounded-lg bg-black/70 border border-gray-700 text-xs text-white font-mono pointer-events-none">
-            ({cursorInfo.x}, {cursorInfo.y}) · {formatTemp(cursorInfo.temp)}
+            ({cursorInfo.x}, {cursorInfo.y}) · {formatTemp(cursorInfo.temp, valueSuffix)}
           </div>
         )}
 

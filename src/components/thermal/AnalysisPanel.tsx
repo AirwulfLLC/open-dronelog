@@ -13,8 +13,8 @@ import {
   formatTemp,
   rangeStats,
 } from '@/lib/thermalPalettes';
-import { CLASSIFICATION_LABELS } from '@/types/thermal';
-import type { AnomalyRegion } from '@/types/thermal';
+import { CLASSIFICATION_LABELS, parseMetashapeMeta } from '@/types/thermal';
+import type { AnomalyRegion, ThermalAsset } from '@/types/thermal';
 import { NetworkPanel } from './NetworkPanel';
 
 const SEVERITY_STYLES: Record<string, string> = {
@@ -67,7 +67,13 @@ export function AnalysisPanel() {
     isAnalyzing,
     reanalyze,
     measureOverrides,
+    valueSuffix,
+    assets,
+    selectedAssetId,
   } = useThermalStore();
+  const fmt = (v: number | null | undefined) => formatTemp(v, valueSuffix);
+  const deg = valueSuffix === '' ? '' : '°';
+  const selectedAssetForInfo = assets.find((a) => a.id === selectedAssetId) ?? null;
 
   const colorBarRef = useRef<HTMLCanvasElement>(null);
   const [zThreshold, setZThreshold] = useState(2.0);
@@ -104,8 +110,9 @@ export function AnalysisPanel() {
   if (!analysis || !stats) {
     return (
       <div className="overflow-y-auto flex-1 min-h-0 text-sm">
+        <VegetationIndexSection />
         <div className="p-4 pb-0 text-xs text-gray-500">
-          Select a radiometric image to see temperature analysis.
+          Select a radiometric image or vegetation index to see value analysis.
         </div>
         <Section title="Heat Flow Network (Radiation Exchange)">
           <NetworkPanel />
@@ -116,15 +123,16 @@ export function AnalysisPanel() {
 
   return (
     <div className="overflow-y-auto flex-1 min-h-0 text-sm">
+      {selectedAssetForInfo && <IndexInfo asset={selectedAssetForInfo} />}
       {/* Quick stats */}
-      <Section title="Temperature Statistics">
+      <Section title={valueSuffix === '' ? 'Index Statistics' : 'Temperature Statistics'}>
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <StatBox label="Max" value={formatTemp(stats.max)} accent="text-red-400" />
-          <StatBox label="Min" value={formatTemp(stats.min)} accent="text-sky-400" />
-          <StatBox label="Mean" value={formatTemp(stats.mean)} />
-          <StatBox label="Median" value={formatTemp(stats.median)} />
-          <StatBox label="Std Dev" value={`${stats.stdDev.toFixed(2)}°`} />
-          <StatBox label="ΔT (max−min)" value={`${(stats.max - stats.min).toFixed(1)}°`} accent="text-amber-300" />
+          <StatBox label="Max" value={fmt(stats.max)} accent="text-red-400" />
+          <StatBox label="Min" value={fmt(stats.min)} accent="text-sky-400" />
+          <StatBox label="Mean" value={fmt(stats.mean)} />
+          <StatBox label="Median" value={fmt(stats.median)} />
+          <StatBox label="Std Dev" value={`${stats.stdDev.toFixed(valueSuffix === '' ? 3 : 2)}${deg}`} />
+          <StatBox label="Δ (max−min)" value={`${(stats.max - stats.min).toFixed(valueSuffix === '' ? 3 : 1)}${deg}`} accent="text-amber-300" />
         </div>
         {/* Histogram */}
         <div className="mt-3">
@@ -151,8 +159,8 @@ export function AnalysisPanel() {
         </div>
         <canvas ref={colorBarRef} width={256} height={12} className="w-full h-3 rounded" />
         <div className="flex justify-between text-[10px] text-gray-500 mt-0.5">
-          <span>{formatTemp(spanLow ?? stats.min)}</span>
-          <span>{formatTemp(spanHigh ?? stats.max)}</span>
+          <span>{fmt(spanLow ?? stats.min)}</span>
+          <span>{fmt(spanHigh ?? stats.max)}</span>
         </div>
         <div className="flex items-center gap-2 mt-2 text-[11px]">
           <label className="text-gray-400">Scale:</label>
@@ -168,18 +176,18 @@ export function AnalysisPanel() {
           </button>
           <input
             type="number"
-            step="0.5"
+            step={valueSuffix === '' ? 0.05 : 0.5}
             value={spanLow ?? ''}
-            placeholder={stats.min.toFixed(1)}
+            placeholder={stats.min.toFixed(valueSuffix === '' ? 2 : 1)}
             onChange={(e) => setSpan(e.target.value === '' ? null : Number(e.target.value), spanHigh)}
             className="w-16 px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-white"
           />
           <span className="text-gray-500">to</span>
           <input
             type="number"
-            step="0.5"
+            step={valueSuffix === '' ? 0.05 : 0.5}
             value={spanHigh ?? ''}
-            placeholder={stats.max.toFixed(1)}
+            placeholder={stats.max.toFixed(valueSuffix === '' ? 2 : 1)}
             onChange={(e) => setSpan(spanLow, e.target.value === '' ? null : Number(e.target.value))}
             className="w-16 px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-white"
           />
@@ -205,6 +213,7 @@ export function AnalysisPanel() {
                 value={isothermLow}
                 min={sliderMin}
                 max={sliderMax}
+                step={valueSuffix === '' ? 0.01 : 0.1}
                 onChange={(v) => setIsotherm(true, Math.min(v, isothermHigh), undefined)}
               />
               <RangeRow
@@ -212,6 +221,7 @@ export function AnalysisPanel() {
                 value={isothermHigh}
                 min={sliderMin}
                 max={sliderMax}
+                step={valueSuffix === '' ? 0.01 : 0.1}
                 onChange={(v) => setIsotherm(true, undefined, Math.max(v, isothermLow))}
               />
             </div>
@@ -246,7 +256,7 @@ export function AnalysisPanel() {
                 <div>
                   Range min/mean/max:{' '}
                   <b>
-                    {formatTemp(isoStats.min)} / {formatTemp(isoStats.mean)} / {formatTemp(isoStats.max)}
+                    {fmt(isoStats.min)} / {fmt(isoStats.mean)} / {fmt(isoStats.max)}
                   </b>
                 </div>
               </div>
@@ -255,7 +265,10 @@ export function AnalysisPanel() {
         )}
       </Section>
 
-      {/* Measurement parameters */}
+      {/* Measurement parameters — SDK physics, meaningless for index rasters.
+          Also prevents Re-measure from writing SDK overrides that would then
+          poison analysis of real thermal images. */}
+      {valueSuffix !== '' && (
       <Section title="Measurement Parameters" defaultOpen={false}>
         <div className="grid grid-cols-2 gap-2 text-[11px]">
           <label className="text-gray-400">
@@ -299,6 +312,7 @@ export function AnalysisPanel() {
           Re-measure
         </button>
       </Section>
+      )}
 
       {/* AI anomaly analysis */}
       <Section title="AI Variance Analysis">
@@ -330,7 +344,7 @@ export function AnalysisPanel() {
         {isothermEnabled && (
           <p className="text-[10px] text-sky-300/80 mb-2">
             Analysis will be restricted to the isolated range{' '}
-            {formatTemp(isothermLow)} – {formatTemp(isothermHigh)}.
+            {fmt(isothermLow)} – {fmt(isothermHigh)}.
           </p>
         )}
         <div className="flex gap-2">
@@ -354,8 +368,8 @@ export function AnalysisPanel() {
         {anomalies && (
           <div className="mt-3 space-y-2">
             <div className="text-[11px] text-gray-400">
-              Baseline (median): <b className="text-gray-200">{formatTemp(anomalies.baseline)}</b> · σ ={' '}
-              {anomalies.stdDev.toFixed(2)}° · {anomalies.regions.length} finding
+              Baseline (median): <b className="text-gray-200">{fmt(anomalies.baseline)}</b> · σ ={' '}
+              {anomalies.stdDev.toFixed(valueSuffix === '' ? 3 : 2)}{deg} · {anomalies.regions.length} finding
               {anomalies.regions.length === 1 ? '' : 's'}
             </div>
             {anomalies.regions.length === 0 && (
@@ -364,18 +378,216 @@ export function AnalysisPanel() {
               </p>
             )}
             {anomalies.regions.map((r) => (
-              <AnomalyCard key={r.id} region={r} />
+              <AnomalyCard key={r.id} region={r} suffix={valueSuffix} />
             ))}
           </div>
         )}
 
-        <AiNarrative />
+        {/* The AI narrative prompt is thermography-specific — hide for indices */}
+        {valueSuffix !== '' && <AiNarrative />}
       </Section>
 
       {/* Heat flow network */}
       <Section title="Heat Flow Network (Radiation Exchange)">
         <NetworkPanel />
       </Section>
+    </div>
+  );
+}
+
+// ---------------- Vegetation indices ----------------
+
+const BAND_ROLES = ['—', 'B', 'G', 'R', 'RE', 'NIR', 'T'] as const;
+const BAND_ROLE_LABELS: Record<string, string> = {
+  B: 'Blue',
+  G: 'Green',
+  R: 'Red',
+  RE: 'RedEdge',
+  NIR: 'NIR',
+  T: 'Thermal',
+};
+
+const INDEX_PRESETS: Array<{ name: string; formula: string; needs: string[] }> = [
+  { name: 'NDVI', formula: '(NIR - R) / (NIR + R)', needs: ['NIR', 'R'] },
+  { name: 'GNDVI', formula: '(NIR - G) / (NIR + G)', needs: ['NIR', 'G'] },
+  { name: 'NDRE', formula: '(NIR - RE) / (NIR + RE)', needs: ['NIR', 'RE'] },
+  { name: 'SAVI', formula: '1.5 * (NIR - R) / (NIR + R + 0.5)', needs: ['NIR', 'R'] },
+  { name: 'VARI', formula: '(G - R) / (G + R - B)', needs: ['G', 'R', 'B'] },
+];
+
+/** Sensible default band roles by band count (common camera layouts). */
+function defaultMapping(bands: number): string[] {
+  if (bands === 4) return ['G', 'R', 'RE', 'NIR']; // DJI Mavic 3M
+  if (bands === 5) return ['B', 'G', 'R', 'RE', 'NIR']; // P4M / RedEdge
+  if (bands >= 6) {
+    const roles = ['B', 'G', 'R', 'RE', 'NIR', 'T']; // MicaSense Altum
+    return Array.from({ length: bands }, (_, i) => roles[i] ?? '—');
+  }
+  return Array.from({ length: bands }, () => '—');
+}
+
+/** Band mapping + index computation for multispectral orthomosaics. */
+function VegetationIndexSection() {
+  const { assets, selectedAssetId, loadAssets, selectAsset } = useThermalStore();
+  const asset: ThermalAsset | null = assets.find((a) => a.id === selectedAssetId) ?? null;
+  const meta = asset ? parseMetashapeMeta(asset) : null;
+  const bands = meta?.kind === 'multispectral' ? (meta.bands ?? 0) : 0;
+
+  const [roles, setRoles] = useState<string[]>([]);
+  const [preset, setPreset] = useState('NDVI');
+  const [formula, setFormula] = useState(INDEX_PRESETS[0].formula);
+  const [indexName, setIndexName] = useState('NDVI');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRoles(defaultMapping(bands));
+    setError(null);
+  }, [selectedAssetId, bands]);
+
+  if (!asset || !meta || meta.kind !== 'multispectral' || bands === 0) return null;
+
+  const mapping: Record<string, number> = {};
+  roles.forEach((role, i) => {
+    if (role !== '—' && !(role in mapping)) mapping[role] = i;
+  });
+
+  const applyPreset = (name: string) => {
+    setPreset(name);
+    const p = INDEX_PRESETS.find((x) => x.name === name);
+    if (p) {
+      setFormula(p.formula);
+      setIndexName(p.name);
+    }
+  };
+
+  const missing =
+    INDEX_PRESETS.find((p) => p.name === preset)?.needs.filter((n) => !(n in mapping)) ?? [];
+
+  const compute = async () => {
+    if (selectedAssetId == null) return;
+    const sourceId = selectedAssetId;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await thermalApi.computeVegetationIndex(
+        sourceId,
+        indexName.trim() || 'Index',
+        formula,
+        mapping,
+      );
+      await loadAssets();
+      // Only jump to the result if the user hasn't moved on meanwhile
+      if (useThermalStore.getState().selectedAssetId === sourceId) {
+        await selectAsset(created.id);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="Vegetation Index (Multispectral)">
+      <p className="text-[10px] text-gray-500 mb-2">
+        {bands}-band multispectral raster ({meta.bitsPerSample}-bit). Map each band to
+        its spectral role, then compute an index — the result becomes a new asset
+        with the full analysis pipeline (histogram, range isolation, anomalies).
+      </p>
+
+      {/* Band mapping */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1 mb-2">
+        {roles.map((role, i) => (
+          <div key={i} className="flex items-center gap-1.5 text-[11px]">
+            <span className="text-gray-500 w-14">Band {i + 1}</span>
+            <select
+              value={role}
+              onChange={(e) => {
+                const next = e.target.value;
+                // A role can only map to one band — claiming it here clears
+                // it from any other band.
+                setRoles(
+                  roles.map((r, j) =>
+                    j === i ? next : r === next && next !== '—' ? '—' : r,
+                  ),
+                );
+              }}
+              className="flex-1 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-white"
+            >
+              {BAND_ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r === '—' ? '— unused —' : `${r} (${BAND_ROLE_LABELS[r]})`}
+                </option>
+              ))}
+            </select>
+          </div>
+        ))}
+      </div>
+
+      {/* Preset + formula */}
+      <div className="flex items-center gap-1.5 mb-1.5 text-[11px]">
+        <span className="text-gray-400">Preset</span>
+        <select
+          value={preset}
+          onChange={(e) => applyPreset(e.target.value)}
+          className="flex-1 px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-white"
+        >
+          {INDEX_PRESETS.map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name}
+            </option>
+          ))}
+          <option value="custom">Custom…</option>
+        </select>
+        <input
+          value={indexName}
+          onChange={(e) => setIndexName(e.target.value)}
+          placeholder="Name"
+          className="w-20 px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-white"
+        />
+      </div>
+      <input
+        value={formula}
+        onChange={(e) => {
+          setFormula(e.target.value);
+          setPreset('custom');
+        }}
+        placeholder="(NIR - R) / (NIR + R)"
+        className="w-full px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-white font-mono"
+      />
+      <p className="mt-1 text-[10px] text-gray-600">
+        Variables: mapped band roles ({Object.keys(mapping).join(', ') || 'none'}) ·
+        operators + − × ÷ and parentheses · constants allowed.
+      </p>
+      {missing.length > 0 && preset !== 'custom' && (
+        <p className="mt-1 text-[10px] text-amber-400/90">
+          {preset} needs band role(s): {missing.join(', ')} — map them above.
+        </p>
+      )}
+      {error && <p className="mt-1 text-[10px] text-red-400 whitespace-pre-wrap">{error}</p>}
+      <button
+        onClick={compute}
+        disabled={busy || Object.keys(mapping).length === 0}
+        className="mt-2 w-full py-1.5 rounded bg-green-700/80 hover:bg-green-700 text-white text-xs font-medium disabled:opacity-50"
+      >
+        {busy ? 'Computing…' : `Compute ${indexName.trim() || 'index'}`}
+      </button>
+    </Section>
+  );
+}
+
+/** Info line shown when the selected asset is a computed index. */
+function IndexInfo({ asset }: { asset: ThermalAsset }) {
+  const meta = parseMetashapeMeta(asset);
+  if (meta?.kind !== 'vegetation_index') return null;
+  return (
+    <div className="px-3 pt-2 text-[10px] text-gray-500">
+      <span className="text-green-400 font-medium">{meta.indexName ?? 'Index'}</span>
+      {meta.formula ? ` = ${meta.formula}` : ''}
+      {meta.stats
+        ? ` · range ${meta.stats.min.toFixed(3)} … ${meta.stats.max.toFixed(3)}`
+        : ''}
     </div>
   );
 }
@@ -517,12 +729,14 @@ function RangeRow({
   value,
   min,
   max,
+  step = 0.1,
   onChange,
 }: {
   label: string;
   value: number;
   min: number;
   max: number;
+  step?: number;
   onChange: (v: number) => void;
 }) {
   return (
@@ -532,14 +746,14 @@ function RangeRow({
         type="range"
         min={min}
         max={max}
-        step={0.1}
+        step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         className="flex-1 accent-sky-500"
       />
       <input
         type="number"
-        step="0.1"
+        step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-16 px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-white"
@@ -548,12 +762,16 @@ function RangeRow({
   );
 }
 
-function AnomalyCard({ region: r }: { region: AnomalyRegion }) {
+function AnomalyCard({ region: r, suffix = '°C' }: { region: AnomalyRegion; suffix?: string }) {
+  const isIndex = suffix === '';
   return (
     <div className="p-2 rounded-lg bg-gray-800/60 border border-gray-700 text-[11px]">
       <div className="flex items-center justify-between mb-1">
         <span className="font-semibold text-gray-100">
-          #{r.id} · {r.kind === 'hot' ? '🔥 Hot' : '❄️ Cold'} spot
+          #{r.id} · {isIndex
+            ? r.kind === 'hot' ? '▲ High' : '▼ Low'
+            : r.kind === 'hot' ? '🔥 Hot' : '❄️ Cold'}{' '}
+          spot
         </span>
         <span
           className={`px-1.5 py-0.5 rounded border text-[10px] font-medium uppercase ${SEVERITY_STYLES[r.severity]}`}
@@ -561,21 +779,23 @@ function AnomalyCard({ region: r }: { region: AnomalyRegion }) {
           {r.severity}
         </span>
       </div>
-      <div className="text-gray-400">
-        {CLASSIFICATION_LABELS[r.classification] ?? r.classification}
-      </div>
+      {!isIndex && (
+        <div className="text-gray-400">
+          {CLASSIFICATION_LABELS[r.classification] ?? r.classification}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-x-2 mt-1 text-gray-400">
         <div>
-          ΔT: <b className="text-gray-200">{r.deltaT > 0 ? '+' : ''}{r.deltaT.toFixed(1)}°C</b>
+          Δ: <b className="text-gray-200">{r.deltaT > 0 ? '+' : ''}{r.deltaT.toFixed(isIndex ? 3 : 1)}{suffix}</b>
         </div>
         <div>
           Area: <b className="text-gray-200">{r.areaPx.toLocaleString()} px</b>
         </div>
         <div>
-          Tmax: <b className="text-gray-200">{formatTemp(r.tMax)}</b>
+          Max: <b className="text-gray-200">{formatTemp(r.tMax, suffix)}</b>
         </div>
         <div>
-          Tmin: <b className="text-gray-200">{formatTemp(r.tMin)}</b>
+          Min: <b className="text-gray-200">{formatTemp(r.tMin, suffix)}</b>
         </div>
       </div>
       <div className="text-gray-500 mt-0.5">
@@ -586,7 +806,7 @@ function AnomalyCard({ region: r }: { region: AnomalyRegion }) {
 }
 
 function Histogram() {
-  const { analysis, isothermEnabled, isothermLow, isothermHigh } = useThermalStore();
+  const { analysis, isothermEnabled, isothermLow, isothermHigh, valueSuffix } = useThermalStore();
   const stats = analysis?.stats;
   if (!stats || stats.histogram.length === 0) return null;
   const maxCount = Math.max(...stats.histogram.map((b) => b.count));
@@ -597,7 +817,7 @@ function Histogram() {
         return (
           <div
             key={i}
-            title={`${b.temp.toFixed(1)}°C: ${b.count.toLocaleString()} px`}
+            title={`${formatTemp(b.temp, valueSuffix)}: ${b.count.toLocaleString()} px`}
             className={`flex-1 rounded-t-sm ${inIso ? 'bg-sky-400' : 'bg-gray-600'}`}
             style={{ height: `${Math.max(2, (b.count / maxCount) * 100)}%` }}
           />

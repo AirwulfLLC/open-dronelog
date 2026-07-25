@@ -104,6 +104,22 @@ export async function readThermalAssetPreview(assetId: number): Promise<ArrayBuf
   return toArrayBuffer(res);
 }
 
+/** Compute a vegetation index over a multispectral asset; returns the new
+ *  index asset (colormapped PNG + raw raster feeding the analysis pipeline). */
+export async function computeVegetationIndex(
+  assetId: number,
+  indexName: string,
+  formula: string,
+  bandMapping: Record<string, number>,
+): Promise<ThermalAsset> {
+  return inv<ThermalAsset>('thermal_compute_index', {
+    assetId,
+    indexName,
+    formula,
+    bandMapping,
+  });
+}
+
 // ---------------- Inspection bundles ----------------
 
 export interface BundleImportResult {

@@ -6,6 +6,7 @@
 
 pub mod analysis;
 pub mod metashape;
+pub mod multispectral;
 pub mod network;
 pub mod sdk;
 
