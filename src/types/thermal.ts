@@ -7,7 +7,7 @@ export interface ThermalAsset {
   fileName: string;
   storedPath: string;
   fileHash: string | null;
-  assetType: 'image' | 'video';
+  assetType: 'image' | 'video' | 'document';
   isRadiometric: boolean;
   width: number;
   height: number;
@@ -17,6 +17,59 @@ export interface ThermalAsset {
   cameraModel: string | null;
   importedAt: string | null;
   notes: string | null;
+  /** 'thermal' (drone media) or 'metashape' (photogrammetry export). */
+  source: 'thermal' | 'metashape';
+  /** Parsed metadata JSON (Metashape kind, preview file, CRS, camera count…). */
+  metaJson: string | null;
+}
+
+/** Parsed shape of ThermalAsset.metaJson for Metashape assets. */
+export interface MetashapeMeta {
+  kind:
+    | 'orthomosaic'
+    | 'processing_report'
+    | 'cameras_xml'
+    | 'reference_csv'
+    | 'point_cloud'
+    | 'map_overlay';
+  sizeBytes?: number;
+  width?: number;
+  height?: number;
+  previewFile?: string;
+  previewError?: string;
+  cameraCount?: number;
+  markerCount?: number;
+  crs?: string;
+  rowCount?: number;
+  columns?: number;
+  format?: string;
+}
+
+export const METASHAPE_KIND_LABELS: Record<string, string> = {
+  orthomosaic: 'Orthomosaic / DEM (GeoTIFF)',
+  processing_report: 'Processing Report (PDF)',
+  cameras_xml: 'Camera Calibration (XML)',
+  reference_csv: 'Camera Reference (CSV)',
+  point_cloud: 'Point Cloud',
+  map_overlay: 'Map Overlay (KML/KMZ)',
+};
+
+export function parseMetashapeMeta(asset: ThermalAsset): MetashapeMeta | null {
+  if (asset.source !== 'metashape' || !asset.metaJson) return null;
+  try {
+    return JSON.parse(asset.metaJson) as MetashapeMeta;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the asset can be rendered as an image in the viewer/reports.
+ *  Metashape GeoTIFFs are only displayable via their generated PNG preview —
+ *  when preview generation failed, treat them as documents. */
+export function hasDisplayableImage(asset: ThermalAsset): boolean {
+  if (asset.assetType !== 'image') return false;
+  if (asset.source !== 'metashape') return true;
+  return !!parseMetashapeMeta(asset)?.previewFile;
 }
 
 export interface ThermalSdkStatus {
@@ -288,6 +341,23 @@ export interface ReportAnomalyEntry {
   recommendation: string;
 }
 
+/** Snapshot of a linked DJI flight, embedded in the report so it renders
+ *  even when the report/bundle is opened where the flight DB entry is absent. */
+export interface FlightSnapshot {
+  id: number;
+  displayName: string;
+  startTime: string | null;
+  droneModel: string | null;
+  aircraftName: string | null;
+  durationSecs: number | null;
+  totalDistance: number | null;
+  maxAltitude: number | null;
+  maxSpeed: number | null;
+  homeLat: number | null;
+  homeLon: number | null;
+  photoCount: number | null;
+}
+
 export interface ThermalReport {
   version: 1;
   // Header data
@@ -301,6 +371,10 @@ export interface ThermalReport {
   anomalies: ReportAnomalyEntry[];
   actionPlan: string;
   orthomosaicLink: string;
+  /** DJI flights linked to this inspection (snapshots, not live references). */
+  linkedFlights: FlightSnapshot[];
+  /** Imported Metashape orthomosaic asset embedded in the report. */
+  orthoAssetId: number | null;
 }
 
 export const EMPTY_REPORT: ThermalReport = {
@@ -314,6 +388,8 @@ export const EMPTY_REPORT: ThermalReport = {
   anomalies: [],
   actionPlan: '',
   orthomosaicLink: '',
+  linkedFlights: [],
+  orthoAssetId: null,
 };
 
 /** Defect classification keys → human-readable labels. */

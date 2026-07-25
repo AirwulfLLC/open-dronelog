@@ -37,7 +37,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn sanitize_file_name(name: &str) -> String {
+pub(crate) fn sanitize_file_name(name: &str) -> String {
     let base = Path::new(name)
         .file_name()
         .and_then(|s| s.to_str())
@@ -48,6 +48,9 @@ fn sanitize_file_name(name: &str) -> String {
 }
 
 /// Shared import logic for both path-based and byte-based imports.
+/// Accepts drone thermal/visual media (jpg/png/mp4…) and Agisoft Metashape
+/// exports (GeoTIFF orthomosaics/DEMs, processing PDFs, camera XML/CSV,
+/// point clouds, KML/KMZ overlays).
 fn import_asset_impl(
     state: &State<'_, AppState>,
     file_name: &str,
@@ -55,8 +58,19 @@ fn import_asset_impl(
 ) -> Result<ThermalAsset, String> {
     let db = state.db_authenticated()?;
 
-    let asset_type = super::asset_type_for(file_name)
-        .ok_or_else(|| format!("Unsupported file type: {file_name}"))?;
+    // Classify: thermal media first, then Metashape artifacts
+    let (asset_type, source, metashape_kind) = match super::asset_type_for(file_name) {
+        Some(t) => (t, "thermal", None),
+        None => match super::metashape::detect_kind(file_name) {
+            Some((kind, viewer_type)) => (viewer_type, "metashape", Some(kind)),
+            None => {
+                return Err(format!(
+                    "Unsupported file type: {file_name} (supported: jpg/png/mp4/mov/avi, and \
+                     Metashape exports: tif/tiff, pdf, xml, csv, las/laz/ply/obj, kml/kmz)"
+                ))
+            }
+        },
+    };
 
     let file_hash = sha256_hex(&bytes);
     if let Some(existing) = db
@@ -69,11 +83,11 @@ fn import_asset_impl(
         ));
     }
 
-    // Probe radiometric data + resolution for images
+    // Probe radiometric data + resolution for thermal images
     let mut is_radiometric = false;
     let mut width = 0i32;
     let mut height = 0i32;
-    if asset_type == "image" {
+    if source == "thermal" && asset_type == "image" {
         if let Ok(m) = sdk::measure(&bytes, MeasureOverrides::default()) {
             is_radiometric = true;
             width = m.width as i32;
@@ -83,7 +97,7 @@ fn import_asset_impl(
         }
     }
 
-    let exif = if asset_type == "image" {
+    let exif = if source == "thermal" && asset_type == "image" {
         super::extract_exif(&bytes)
     } else {
         super::ExifMeta::default()
@@ -98,6 +112,30 @@ fn import_asset_impl(
     let safe_name = sanitize_file_name(file_name);
     let stored_path = folder.join(format!("{id}_{safe_name}"));
     std::fs::write(&stored_path, &bytes).map_err(|e| format!("Failed to store asset: {e}"))?;
+
+    // Metashape metadata + orthomosaic preview
+    let mut meta_json: Option<String> = None;
+    let mut extra_files: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(kind) = metashape_kind {
+        let mut meta = super::metashape::parse_metadata(kind, &bytes);
+        if kind == "orthomosaic" {
+            match super::metashape::generate_tiff_preview(&bytes, &folder, &format!("{id}")) {
+                Ok((w, h, preview_name)) => {
+                    width = w as i32;
+                    height = h as i32;
+                    meta["previewFile"] = serde_json::json!(preview_name);
+                    meta["width"] = serde_json::json!(w);
+                    meta["height"] = serde_json::json!(h);
+                    extra_files.push(folder.join(&preview_name));
+                }
+                Err(e) => {
+                    // Keep the original; it just won't render in the viewer
+                    meta["previewError"] = serde_json::json!(e);
+                }
+            }
+        }
+        meta_json = Some(meta.to_string());
+    }
 
     let asset = ThermalAsset {
         id,
@@ -114,14 +152,27 @@ fn import_asset_impl(
         camera_model: exif.camera_model,
         imported_at: None,
         notes: None,
+        source: source.to_string(),
+        meta_json,
     };
 
     if let Err(e) = db.insert_thermal_asset(&asset) {
-        // Don't strand the copied file if the row insert fails
+        // Don't strand copied files if the row insert fails
         let _ = std::fs::remove_file(&stored_path);
+        for f in &extra_files {
+            let _ = std::fs::remove_file(f);
+        }
         return Err(e.to_string());
     }
     db.get_thermal_asset(id).map_err(|e| e.to_string())
+}
+
+/// Path of an asset's preview file, when its metadata declares one.
+pub(crate) fn preview_path_for(asset: &ThermalAsset) -> Option<std::path::PathBuf> {
+    let meta: serde_json::Value = serde_json::from_str(asset.meta_json.as_deref()?).ok()?;
+    let preview = meta["previewFile"].as_str()?;
+    let dir = std::path::Path::new(&asset.stored_path).parent()?;
+    Some(dir.join(preview))
 }
 
 #[tauri::command]
@@ -151,6 +202,29 @@ pub async fn thermal_import_asset_bytes(
     import_asset_impl(&state, &file_name, file_bytes)
 }
 
+/// Raw-body import: the file content travels as the binary IPC body instead
+/// of a JSON number array, which matters for large files (GeoTIFF
+/// orthomosaics are routinely hundreds of MB). The file name arrives
+/// base64-encoded in the `file-name-b64` header (UTF-8 safe).
+#[tauri::command]
+pub async fn thermal_import_asset_raw(
+    request: tauri::ipc::Request<'_>,
+    state: State<'_, AppState>,
+) -> Result<ThermalAsset, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected raw binary body".to_string());
+    };
+    use base64::Engine as _;
+    let file_name = request
+        .headers()
+        .get("file-name-b64")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok())
+        .and_then(|raw| String::from_utf8(raw).ok())
+        .ok_or_else(|| "Missing or invalid file-name-b64 header".to_string())?;
+    import_asset_impl(&state, &file_name, bytes.clone())
+}
+
 #[tauri::command]
 pub async fn thermal_list_assets(state: State<'_, AppState>) -> Result<Vec<ThermalAsset>, String> {
     let db = state.db_authenticated()?;
@@ -161,9 +235,33 @@ pub async fn thermal_list_assets(state: State<'_, AppState>) -> Result<Vec<Therm
 pub async fn thermal_delete_asset(asset_id: i64, state: State<'_, AppState>) -> Result<(), String> {
     let db = state.db_authenticated()?;
     let asset = db.get_thermal_asset(asset_id).map_err(|e| e.to_string())?;
-    // Remove the stored file (best-effort), then the DB rows
+    // Remove the stored file and any preview (best-effort), then the DB rows
     let _ = std::fs::remove_file(&asset.stored_path);
+    if let Some(preview) = preview_path_for(&asset) {
+        let _ = std::fs::remove_file(preview);
+    }
     db.delete_thermal_asset(asset_id).map_err(|e| e.to_string())
+}
+
+/// Return displayable bytes for an asset: the PNG preview when one exists
+/// (GeoTIFF orthomosaics), otherwise the original file.
+#[tauri::command]
+pub async fn thermal_read_asset_preview(
+    asset_id: i64,
+    state: State<'_, AppState>,
+) -> Result<tauri::ipc::Response, String> {
+    let db = state.db_authenticated()?;
+    let asset = db.get_thermal_asset(asset_id).map_err(|e| e.to_string())?;
+    if let Some(preview) = preview_path_for(&asset) {
+        if preview.exists() {
+            let bytes = std::fs::read(&preview)
+                .map_err(|e| format!("Failed to read preview file: {e}"))?;
+            return Ok(tauri::ipc::Response::new(bytes));
+        }
+    }
+    let bytes =
+        std::fs::read(&asset.stored_path).map_err(|e| format!("Failed to read asset file: {e}"))?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]

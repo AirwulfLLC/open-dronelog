@@ -9,9 +9,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useThermalStore } from '@/stores/thermalStore';
 import { isThermalSupported } from '@/lib/thermalApi';
+import * as thermalApi from '@/lib/thermalApi';
 import { ThermalViewer } from './ThermalViewer';
 import { AnalysisPanel } from './AnalysisPanel';
 import { ReportBuilder } from './ReportBuilder';
+import { METASHAPE_KIND_LABELS, hasDisplayableImage, parseMetashapeMeta } from '@/types/thermal';
+import { isWebMode } from '@/lib/api';
 import type { AnnotationTool, ThermalAsset } from '@/types/thermal';
 
 const TOOLS: Array<{ key: AnnotationTool; label: string; icon: string; title: string }> = [
@@ -74,6 +77,46 @@ export function ThermalStudio() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // Tauri desktop intercepts native file drops before they reach the DOM, so
+  // react-dropzone never fires there — listen to the webview drag-drop event
+  // instead (paths, which also avoids shipping big files over IPC). Extensions
+  // are filtered so drops meant for the flight importer (.txt/.csv) pass by.
+  const [tauriDragActive, setTauriDragActive] = useState(false);
+  useEffect(() => {
+    if (isWebMode()) return;
+    const DROP_EXTS = new Set([
+      'jpg', 'jpeg', 'png', 'mp4', 'mov', 'avi',
+      'tif', 'tiff', 'pdf', 'xml', 'las', 'laz', 'ply', 'obj', 'kml', 'kmz',
+    ]);
+    let unlisten: (() => void) | null = null;
+    (async () => {
+      try {
+        const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+        unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+          if (event.payload.type === 'over') {
+            setTauriDragActive(true);
+          } else if (event.payload.type === 'drop') {
+            setTauriDragActive(false);
+            const paths = event.payload.paths.filter((p: string) => {
+              const ext = p.split('.').pop()?.toLowerCase() ?? '';
+              return DROP_EXTS.has(ext);
+            });
+            if (paths.length > 0) {
+              void useThermalStore.getState().importFiles(paths.map((path) => ({ path })));
+            }
+          } else if (event.payload.type === 'leave') {
+            setTauriDragActive(false);
+          }
+        });
+      } catch (e) {
+        console.warn('Tauri drag-drop listener not available:', e);
+      }
+    })();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const onDrop = useCallback(
     async (accepted: File[]) => {
       const files = await Promise.all(
@@ -97,6 +140,13 @@ export function ThermalStudio() {
       'video/mp4': ['.mp4'],
       'video/quicktime': ['.mov'],
       'video/x-msvideo': ['.avi'],
+      // Agisoft Metashape exports
+      'image/tiff': ['.tif', '.tiff'],
+      'application/pdf': ['.pdf'],
+      'text/xml': ['.xml'],
+      'text/csv': ['.csv'],
+      'application/vnd.google-earth.kml+xml': ['.kml'],
+      'application/octet-stream': ['.las', '.laz', '.ply', '.obj', '.kmz'],
     },
   });
 
@@ -170,7 +220,7 @@ export function ThermalStudio() {
               <span className={`transition-transform text-[9px] ${reportMenuOpen ? 'rotate-180' : ''}`}>▼</span>
             </button>
             {reportMenuOpen && (
-              <div className="absolute right-0 mt-1 w-56 rounded-lg border border-gray-600 bg-gray-800 shadow-xl z-50 py-1 text-xs">
+              <div className="absolute right-0 mt-1 w-60 rounded-lg border border-gray-600 bg-gray-800 shadow-xl z-50 py-1 text-xs">
                 <button
                   onClick={() => {
                     setReportMenuOpen(false);
@@ -180,9 +230,40 @@ export function ThermalStudio() {
                 >
                   Open report builder…
                 </button>
+                <button
+                  onClick={async () => {
+                    setReportMenuOpen(false);
+                    try {
+                      const { open } = await import('@tauri-apps/plugin-dialog');
+                      const selected = await open({
+                        multiple: false,
+                        title: 'Import inspection bundle',
+                        filters: [{ name: 'Inspection Bundle', extensions: ['odlbundle'] }],
+                      });
+                      const path = typeof selected === 'string' ? selected : null;
+                      if (!path) return;
+                      const result = await thermalApi.importThermalBundle(path);
+                      await loadAssets();
+                      window.alert(
+                        `Bundle imported: ${result.importedAssets} new asset(s), ` +
+                          `${result.skippedAssets} already present` +
+                          (result.reportName ? `, report "${result.reportName}"` : '') +
+                          (result.archivedFlights
+                            ? `, ${result.archivedFlights} archived flight(s) in the bundle file`
+                            : ''),
+                      );
+                    } catch (e) {
+                      window.alert(`Bundle import failed: ${e instanceof Error ? e.message : e}`);
+                    }
+                  }}
+                  className="w-full text-left px-3 py-2 text-gray-200 hover:bg-drone-primary/20"
+                >
+                  Import inspection bundle…
+                </button>
                 <div className="px-3 py-1.5 text-[10px] text-gray-500 border-t border-gray-700 mt-1">
-                  Build inspection reports with header data, imaging log, anomaly
-                  findings and action plan — export as PDF or RTF.
+                  Build inspection reports (PDF/RTF) from thermal findings, Metashape
+                  orthomosaics and linked DJI flights — or exchange complete
+                  inspections as single .odlbundle files.
                 </div>
               </div>
             )}
@@ -199,9 +280,11 @@ export function ThermalStudio() {
       )}
 
       {/* Drag overlay */}
-      {isDragActive && (
+      {(isDragActive || tauriDragActive) && (
         <div className="absolute inset-0 z-50 bg-drone-primary/20 border-4 border-dashed border-drone-primary flex items-center justify-center pointer-events-none">
-          <p className="text-lg font-semibold text-white">Drop thermal photos or videos to import</p>
+          <p className="text-lg font-semibold text-white">
+            Drop thermal photos/videos or Metashape exports to import
+          </p>
         </div>
       )}
 
@@ -237,7 +320,11 @@ export function ThermalStudio() {
 
         {/* Viewer area */}
         <div className="flex-1 min-w-0 flex flex-col min-h-0">
-          {selectedAsset ? (
+          {selectedAsset &&
+          (selectedAsset.assetType === 'document' ||
+            (selectedAsset.assetType === 'image' && !hasDisplayableImage(selectedAsset))) ? (
+            <MetashapeDocCard asset={selectedAsset} />
+          ) : selectedAsset ? (
             <>
               {/* Annotation toolbar */}
               <div className="flex items-center gap-1 px-3 py-1.5 border-b border-gray-700 bg-drone-secondary/30 flex-wrap">
@@ -358,6 +445,23 @@ export function ThermalStudio() {
   );
 }
 
+function assetIcon(asset: ThermalAsset): string {
+  if (asset.source === 'metashape') {
+    return asset.assetType === 'image' ? '🗺️' : '📄';
+  }
+  if (asset.assetType === 'video') return '🎬';
+  return asset.isRadiometric ? '🌡️' : '🖼️';
+}
+
+function assetSubtitle(asset: ThermalAsset): string {
+  if (asset.source === 'metashape') {
+    const meta = parseMetashapeMeta(asset);
+    return meta ? METASHAPE_KIND_LABELS[meta.kind] ?? meta.kind : 'Metashape export';
+  }
+  if (asset.isRadiometric) return `Radiometric ${asset.width}×${asset.height}`;
+  return asset.assetType === 'video' ? 'Video' : 'Image';
+}
+
 function AssetRow({
   asset,
   selected,
@@ -378,7 +482,7 @@ function AssetRow({
     >
       <div className="flex items-center justify-between gap-1">
         <span className={`truncate ${selected ? 'text-white font-medium' : 'text-gray-300'}`}>
-          {asset.assetType === 'video' ? '🎬' : asset.isRadiometric ? '🌡️' : '🖼️'} {asset.fileName}
+          {assetIcon(asset)} {asset.fileName}
         </span>
         <button
           onClick={(e) => {
@@ -392,12 +496,91 @@ function AssetRow({
         </button>
       </div>
       <div className="text-[10px] text-gray-500 mt-0.5">
-        {asset.isRadiometric
-          ? `Radiometric ${asset.width}×${asset.height}`
-          : asset.assetType === 'video'
-            ? 'Video'
-            : 'Image'}
+        {assetSubtitle(asset)}
         {asset.capturedAt ? ` · ${asset.capturedAt.split(' ')[0]}` : ''}
+      </div>
+    </div>
+  );
+}
+
+/** Metadata card for Metashape documents (PDF reports, camera files, point clouds…). */
+function MetashapeDocCard({ asset }: { asset: ThermalAsset }) {
+  const meta = parseMetashapeMeta(asset);
+  const fmtSize = (b?: number) => {
+    if (b == null) return '—';
+    if (b >= 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
+    if (b >= 1024) return `${(b / 1024).toFixed(0)} KB`;
+    return `${b} B`;
+  };
+  return (
+    <div className="flex-1 min-h-0 flex items-center justify-center p-6">
+      <div className="max-w-md w-full p-5 rounded-xl border border-gray-700 bg-gray-800/50">
+        <div className="flex items-center gap-3 mb-3">
+          <span className="text-3xl">📄</span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-white truncate">{asset.fileName}</p>
+            <p className="text-xs text-gray-400">
+              {meta ? METASHAPE_KIND_LABELS[meta.kind] ?? meta.kind : 'Metashape export'}
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
+          <span>Size</span>
+          <span className="text-gray-200">{fmtSize(meta?.sizeBytes)}</span>
+          {meta?.cameraCount != null && (
+            <>
+              <span>Cameras</span>
+              <span className="text-gray-200">{meta.cameraCount.toLocaleString()}</span>
+            </>
+          )}
+          {meta?.markerCount != null && (
+            <>
+              <span>Markers</span>
+              <span className="text-gray-200">{meta.markerCount}</span>
+            </>
+          )}
+          {meta?.crs && (
+            <>
+              <span>Coordinate system</span>
+              <span className="text-gray-200 truncate" title={meta.crs}>{meta.crs}</span>
+            </>
+          )}
+          {meta?.rowCount != null && (
+            <>
+              <span>Reference rows</span>
+              <span className="text-gray-200">{meta.rowCount.toLocaleString()}</span>
+            </>
+          )}
+          {meta?.format && (
+            <>
+              <span>Format</span>
+              <span className="text-gray-200 uppercase">{meta.format}</span>
+            </>
+          )}
+        </div>
+        {meta?.previewError && (
+          <p className="mt-3 text-[10px] text-amber-400/90">
+            No in-app preview could be generated for this GeoTIFF ({meta.previewError}).
+            The original file is stored and can be opened externally.
+          </p>
+        )}
+        <button
+          onClick={async () => {
+            try {
+              const { openPath } = await import('@tauri-apps/plugin-opener');
+              await openPath(asset.storedPath);
+            } catch (e) {
+              window.alert(`Could not open file: ${e instanceof Error ? e.message : e}`);
+            }
+          }}
+          className="mt-4 w-full py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium"
+        >
+          Open in default application
+        </button>
+        <p className="mt-2 text-[10px] text-gray-500">
+          This file travels with the inspection: it is stored in the project library and
+          included when exporting an inspection bundle.
+        </p>
       </div>
     </div>
   );

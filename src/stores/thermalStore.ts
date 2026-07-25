@@ -19,7 +19,7 @@ import type {
   ThermalNetworkModel,
   ThermalSdkStatus,
 } from '@/types/thermal';
-import { EMPTY_NETWORK } from '@/types/thermal';
+import { EMPTY_NETWORK, hasDisplayableImage } from '@/types/thermal';
 import * as thermalApi from '@/lib/thermalApi';
 
 interface ThermalState {
@@ -248,6 +248,9 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
       network: EMPTY_NETWORK,
       networkResult: null,
       selectedNetElement: null,
+      // Clear any spinner from a previous in-flight load — its stale-selection
+      // guards will (correctly) refuse to touch state after this switch.
+      isAnalyzing: false,
     });
     if (assetId == null) {
       replaceObjectUrl(null, '');
@@ -258,13 +261,26 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
 
     set({ isAnalyzing: true });
     try {
-      // Load the original file for preview
-      const fileBytes = await thermalApi.readThermalAssetFile(assetId);
-      // Bail if the user already switched to another asset — a stale loser
-      // must never revoke the winner's live object URL or overwrite its state.
-      if (get().selectedAssetId !== assetId) return;
-      const assetUrl = replaceObjectUrl(fileBytes, mimeFor(asset));
-      set({ assetUrl });
+      // Load the displayable file. Images go through the preview endpoint so
+      // GeoTIFF orthomosaics render via their generated PNG preview;
+      // documents (PDF/XML/point clouds…) and GeoTIFFs whose preview failed
+      // have no inline preview.
+      const displayable = asset.assetType === 'video' || hasDisplayableImage(asset);
+      if (displayable) {
+        const fileBytes =
+          asset.assetType === 'image'
+            ? await thermalApi.readThermalAssetPreview(assetId)
+            : await thermalApi.readThermalAssetFile(assetId);
+        // Bail if the user already switched to another asset — a stale loser
+        // must never revoke the winner's live object URL or overwrite its state.
+        if (get().selectedAssetId !== assetId) return;
+        const mime =
+          asset.source === 'metashape' && asset.assetType === 'image'
+            ? 'image/png'
+            : mimeFor(asset);
+        const assetUrl = replaceObjectUrl(fileBytes, mime);
+        set({ assetUrl });
+      }
 
       // Load persisted annotations
       try {

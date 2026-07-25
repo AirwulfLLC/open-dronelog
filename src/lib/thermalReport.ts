@@ -13,6 +13,29 @@ export interface ReportImages {
   [entryId: string]: { thermal: string | null; visual: string | null };
 }
 
+/** Extra embeddable content resolved at export time. */
+export interface ReportExtras {
+  /** PNG data URL of the embedded Metashape orthomosaic preview. */
+  orthoDataUrl?: string | null;
+  /** Caption for the orthomosaic (file name, dimensions, CRS). */
+  orthoLabel?: string;
+  /** height/width of the orthomosaic — preserves the true aspect ratio. */
+  orthoAspect?: number;
+}
+
+function fmtDuration(secs: number | null): string {
+  if (secs == null || Number.isNaN(secs)) return '—';
+  const total = Math.round(secs);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+function fmtMeters(m: number | null): string {
+  if (m == null || Number.isNaN(m)) return '—';
+  return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(0)} m`;
+}
+
 const SEVERITY_LABELS: Record<string, string> = {
   low: 'Low',
   medium: 'Medium',
@@ -43,6 +66,7 @@ function appVersion(): string {
 export async function buildReportPdf(
   report: ThermalReport,
   images: ReportImages,
+  extras: ReportExtras = {},
 ): Promise<Uint8Array> {
   const { jsPDF } = await import('jspdf');
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -114,8 +138,10 @@ export async function buildReportPdf(
   doc.setTextColor(0, 0, 0);
   y += 8;
 
+  let sec = 1;
+
   // ---- Header data ----
-  heading('1. Header Data');
+  heading(`${sec++}. Header Data`);
   kv('Property Address', report.propertyAddress);
   kv('Inspection Date', report.inspectionDate);
   kv('Weather Conditions', report.weatherConditions);
@@ -123,12 +149,88 @@ export async function buildReportPdf(
   y += 3;
 
   if (report.summary.trim()) {
-    heading('2. Summary');
+    heading(`${sec++}. Summary`);
     paragraph(report.summary);
   }
 
+  // ---- Linked DJI flight operations ----
+  if ((report.linkedFlights ?? []).length > 0) {
+    heading(`${sec++}. Flight Operations (DJI)`);
+    for (const f of report.linkedFlights) {
+      checkPage(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text(f.displayName || `Flight ${f.id}`, margin, y);
+      y += 5;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      const details = [
+        f.startTime ? `Date: ${f.startTime}` : null,
+        f.droneModel ? `Drone: ${f.droneModel}${f.aircraftName ? ` (${f.aircraftName})` : ''}` : null,
+        `Duration: ${fmtDuration(f.durationSecs)}`,
+        `Distance: ${fmtMeters(f.totalDistance)}`,
+        f.maxAltitude != null ? `Max altitude: ${f.maxAltitude.toFixed(0)} m` : null,
+        f.maxSpeed != null ? `Max speed: ${f.maxSpeed.toFixed(1)} m/s` : null,
+        f.homeLat != null && f.homeLon != null
+          ? `Home: ${f.homeLat.toFixed(6)}, ${f.homeLon.toFixed(6)}`
+          : null,
+        f.photoCount != null ? `Photos: ${f.photoCount}` : null,
+      ]
+        .filter(Boolean)
+        .join('  ·  ');
+      const lines = doc.splitTextToSize(details, contentW) as string[];
+      for (const line of lines) {
+        checkPage(5);
+        doc.text(line, margin, y);
+        y += 4.2;
+      }
+      y += 3;
+    }
+  }
+
+  // ---- Metashape orthomosaic ----
+  if (extras.orthoDataUrl || report.orthomosaicLink.trim()) {
+    heading(`${sec++}. Orthomosaic (Agisoft Metashape)`);
+    if (extras.orthoDataUrl) {
+      const aspect = extras.orthoAspect && extras.orthoAspect > 0 ? extras.orthoAspect : 0.66;
+      let imgW = contentW;
+      let imgH = imgW * aspect;
+      const maxH = pageH - margin * 2 - 24;
+      if (imgH > maxH) {
+        imgH = maxH;
+        imgW = imgH / aspect;
+      }
+      checkPage(imgH + 14);
+      try {
+        const x = margin + (contentW - imgW) / 2;
+        doc.addImage(extras.orthoDataUrl, 'PNG', x, y, imgW, imgH, undefined, 'FAST');
+        y += imgH + 3;
+      } catch {
+        // embed is best-effort
+      }
+      if (extras.orthoLabel) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(110, 110, 110);
+        checkPage(5);
+        doc.text(extras.orthoLabel, margin, y);
+        doc.setTextColor(0, 0, 0);
+        y += 6;
+      }
+    }
+    if (report.orthomosaicLink.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(20, 90, 200);
+      checkPage(6);
+      doc.textWithLink(report.orthomosaicLink, margin, y, { url: report.orthomosaicLink });
+      doc.setTextColor(0, 0, 0);
+      y += 7;
+    }
+  }
+
   // ---- Imaging log / comparative matrix ----
-  heading('3. Thermal Imaging Log & Comparative Matrix');
+  heading(`${sec++}. Thermal Imaging Log & Comparative Matrix`);
   if (report.imagingLog.length === 0) {
     paragraph('No imaging entries.');
   }
@@ -187,7 +289,7 @@ export async function buildReportPdf(
   }
 
   // ---- Anomaly log ----
-  heading('4. Thermal Anomaly Log');
+  heading(`${sec++}. Thermal Anomaly Log`);
   if (report.anomalies.length === 0) {
     paragraph('No anomalies recorded.');
   } else {
@@ -276,7 +378,7 @@ export async function buildReportPdf(
   }
 
   // ---- Action plan ----
-  heading('5. Action Plan & Repair Prioritization');
+  heading(`${sec++}. Action Plan & Repair Prioritization`);
   if (report.actionPlan.trim()) {
     paragraph(report.actionPlan);
   } else {
@@ -293,17 +395,6 @@ export async function buildReportPdf(
         `${low.length} low-severity (monitor).`,
       9,
     );
-  }
-
-  if (report.orthomosaicLink.trim()) {
-    heading('6. Orthomosaic Map');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.setTextColor(20, 90, 200);
-    checkPage(6);
-    doc.textWithLink(report.orthomosaicLink, margin, y, { url: report.orthomosaicLink });
-    doc.setTextColor(0, 0, 0);
-    y += 6;
   }
 
   // Page footers
@@ -347,22 +438,29 @@ function rtfEscape(text: string): string {
   return out;
 }
 
+/** Byte → two-char hex lookup (hot path for multi-MB embedded images). */
+const HEX_LUT = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
+
 /** Convert a PNG/JPEG data URL to an RTF \pict group. */
 function dataUrlToRtfPict(dataUrl: string, widthTwips: number, heightTwips: number): string {
   const [meta, b64] = dataUrl.split(',', 2);
   if (!b64) return '';
   const isPng = meta.includes('image/png');
   const binary = atob(b64);
-  let hex = '';
+  const parts: string[] = [];
   for (let i = 0; i < binary.length; i++) {
-    hex += binary.charCodeAt(i).toString(16).padStart(2, '0');
-    if (i % 64 === 63) hex += '\n';
+    parts.push(HEX_LUT[binary.charCodeAt(i)]);
+    if (i % 64 === 63) parts.push('\n');
   }
   const type = isPng ? '\\pngblip' : '\\jpegblip';
-  return `{\\pict${type}\\picwgoal${widthTwips}\\pichgoal${heightTwips}\n${hex}}`;
+  return `{\\pict${type}\\picwgoal${widthTwips}\\pichgoal${heightTwips}\n${parts.join('')}}`;
 }
 
-export function buildReportRtf(report: ThermalReport, images: ReportImages): string {
+export function buildReportRtf(
+  report: ThermalReport,
+  images: ReportImages,
+  extras: ReportExtras = {},
+): string {
   const parts: string[] = [];
   parts.push(
     '{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Helvetica;}{\\f1 Courier New;}}' +
@@ -387,18 +485,60 @@ export function buildReportRtf(report: ThermalReport, images: ReportImages): str
     `{\\pard\\sa200\\fs16\\cf3 Generated by Open DroneLog${appVersion() ? ` v${appVersion()}` : ''} \\u183? DJI Thermal SDK\\par}`,
   );
 
-  heading('1. Header Data');
+  let sec = 1;
+
+  heading(`${sec++}. Header Data`);
   kv('Property Address', report.propertyAddress);
   kv('Inspection Date', report.inspectionDate);
   kv('Weather Conditions', report.weatherConditions);
   kv('Inspector Name', report.inspectorName);
 
   if (report.summary.trim()) {
-    heading('2. Summary');
+    heading(`${sec++}. Summary`);
     para(report.summary);
   }
 
-  heading('3. Thermal Imaging Log & Comparative Matrix');
+  if ((report.linkedFlights ?? []).length > 0) {
+    heading(`${sec++}. Flight Operations (DJI)`);
+    for (const f of report.linkedFlights) {
+      sub(f.displayName || `Flight ${f.id}`);
+      if (f.startTime) kv('Date', f.startTime);
+      if (f.droneModel) {
+        kv('Drone', `${f.droneModel}${f.aircraftName ? ` (${f.aircraftName})` : ''}`);
+      }
+      kv('Duration', fmtDuration(f.durationSecs));
+      kv('Distance', fmtMeters(f.totalDistance));
+      if (f.maxAltitude != null) kv('Max altitude', `${f.maxAltitude.toFixed(0)} m`);
+      if (f.maxSpeed != null) kv('Max speed', `${f.maxSpeed.toFixed(1)} m/s`);
+      if (f.homeLat != null && f.homeLon != null) {
+        kv('Home position', `${f.homeLat.toFixed(6)}, ${f.homeLon.toFixed(6)}`);
+      }
+      if (f.photoCount != null) kv('Photos', String(f.photoCount));
+    }
+  }
+
+  if (extras.orthoDataUrl || report.orthomosaicLink.trim()) {
+    heading(`${sec++}. Orthomosaic (Agisoft Metashape)`);
+    if (extras.orthoDataUrl) {
+      // ~16cm wide (9072 twips), height per the true aspect ratio capped at ~23cm
+      const aspect = extras.orthoAspect && extras.orthoAspect > 0 ? extras.orthoAspect : 0.66;
+      let wTw = 9072;
+      let hTw = Math.round(wTw * aspect);
+      if (hTw > 12960) {
+        hTw = 12960;
+        wTw = Math.round(hTw / aspect);
+      }
+      parts.push(`{\\pard\\sa60 ${dataUrlToRtfPict(extras.orthoDataUrl, wTw, hTw)}\\par}`);
+      if (extras.orthoLabel) {
+        parts.push(`{\\pard\\sa120\\fs16\\cf3 ${rtfEscape(extras.orthoLabel)}\\par}`);
+      }
+    }
+    if (report.orthomosaicLink.trim()) {
+      para(report.orthomosaicLink);
+    }
+  }
+
+  heading(`${sec++}. Thermal Imaging Log & Comparative Matrix`);
   if (report.imagingLog.length === 0) para('No imaging entries.');
   report.imagingLog.forEach((entry: ReportImageEntry, i: number) => {
     sub(`${i + 1}. ${entry.caption || 'Imaging pair'}`);
@@ -416,7 +556,7 @@ export function buildReportRtf(report: ThermalReport, images: ReportImages): str
     }
   });
 
-  heading('4. Thermal Anomaly Log');
+  heading(`${sec++}. Thermal Anomaly Log`);
   if (report.anomalies.length === 0) {
     para('No anomalies recorded.');
   } else {
@@ -439,7 +579,7 @@ export function buildReportRtf(report: ThermalReport, images: ReportImages): str
     }
   }
 
-  heading('5. Action Plan & Repair Prioritization');
+  heading(`${sec++}. Action Plan & Repair Prioritization`);
   para(report.actionPlan.trim() || 'No action plan recorded.');
   const high = report.anomalies.filter((a: ReportAnomalyEntry) => a.severity === 'high').length;
   const medium = report.anomalies.filter((a: ReportAnomalyEntry) => a.severity === 'medium').length;
@@ -448,11 +588,6 @@ export function buildReportRtf(report: ThermalReport, images: ReportImages): str
     para(
       `Priority summary: ${high} high-severity (immediate corrective action), ${medium} medium-severity (schedule repair), ${low} low-severity (monitor).`,
     );
-  }
-
-  if (report.orthomosaicLink.trim()) {
-    heading('6. Orthomosaic Map');
-    para(report.orthomosaicLink);
   }
 
   parts.push('}');

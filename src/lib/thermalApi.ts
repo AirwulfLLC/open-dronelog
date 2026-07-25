@@ -52,11 +52,15 @@ export async function importThermalAsset(filePath: string): Promise<ThermalAsset
 
 export async function importThermalAssetBytes(
   fileName: string,
-  fileBytes: number[] | Uint8Array,
+  fileBytes: Uint8Array,
 ): Promise<ThermalAsset> {
-  return inv<ThermalAsset>('thermal_import_asset_bytes', {
-    fileName,
-    fileBytes: Array.from(fileBytes),
+  if (isWeb) throw new Error(WEB_UNSUPPORTED);
+  // Raw binary IPC body — a JSON number array would freeze the app for
+  // large files (GeoTIFF orthomosaics are routinely hundreds of MB).
+  const { invoke } = await import('@tauri-apps/api/core');
+  const nameB64 = btoa(String.fromCharCode(...new TextEncoder().encode(fileName)));
+  return invoke<ThermalAsset>('thermal_import_asset_raw', fileBytes, {
+    headers: { 'file-name-b64': nameB64 },
   });
 }
 
@@ -75,16 +79,61 @@ export async function updateThermalAssetNotes(
   await inv('thermal_update_asset_notes', { assetId, notes });
 }
 
-/** Read the stored asset file as raw bytes (ArrayBuffer). */
-export async function readThermalAssetFile(assetId: number): Promise<ArrayBuffer> {
-  const res = await inv<ArrayBuffer | Uint8Array | number[]>('thermal_read_asset_file', {
-    assetId,
-  });
+function toArrayBuffer(res: ArrayBuffer | Uint8Array | number[]): ArrayBuffer {
   if (res instanceof ArrayBuffer) return res;
   if (res instanceof Uint8Array) {
     return res.buffer.slice(res.byteOffset, res.byteOffset + res.byteLength) as ArrayBuffer;
   }
   return new Uint8Array(res).buffer;
+}
+
+/** Read the stored asset file as raw bytes (ArrayBuffer). */
+export async function readThermalAssetFile(assetId: number): Promise<ArrayBuffer> {
+  const res = await inv<ArrayBuffer | Uint8Array | number[]>('thermal_read_asset_file', {
+    assetId,
+  });
+  return toArrayBuffer(res);
+}
+
+/** Read displayable bytes: the PNG preview when one exists (GeoTIFFs),
+ *  otherwise the original file. */
+export async function readThermalAssetPreview(assetId: number): Promise<ArrayBuffer> {
+  const res = await inv<ArrayBuffer | Uint8Array | number[]>('thermal_read_asset_preview', {
+    assetId,
+  });
+  return toArrayBuffer(res);
+}
+
+// ---------------- Inspection bundles ----------------
+
+export interface BundleImportResult {
+  reportId: number | null;
+  reportName: string | null;
+  importedAssets: number;
+  skippedAssets: number;
+  archivedFlights: number;
+}
+
+export async function exportThermalBundle(args: {
+  destPath: string;
+  name: string;
+  reportId?: number | null;
+  reportJson?: string | null;
+  assetIds: number[];
+  flightIds: number[];
+}): Promise<string> {
+  return inv<string>('thermal_export_bundle', {
+    destPath: args.destPath,
+    name: args.name,
+    reportId: args.reportId ?? null,
+    reportJson: args.reportJson ?? null,
+    assetIds: args.assetIds,
+    flightIds: args.flightIds,
+  });
+}
+
+export async function importThermalBundle(srcPath: string): Promise<BundleImportResult> {
+  return inv<BundleImportResult>('thermal_import_bundle', { srcPath });
 }
 
 export async function analyzeThermalAsset(

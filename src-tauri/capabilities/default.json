@@ -15,6 +15,10 @@
         { "url": "tel:*" }
       ]
     },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "**" }]
+    },
     "android-fs:default",
     "android-fs:allow-write-text-file",
     "dialog:allow-open",

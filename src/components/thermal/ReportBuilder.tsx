@@ -8,17 +8,46 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useThermalStore } from '@/stores/thermalStore';
+import { useFlightStore } from '@/stores/flightStore';
 import * as thermalApi from '@/lib/thermalApi';
-import { buildReportPdf, buildReportRtf, saveReportFile, type ReportImages } from '@/lib/thermalReport';
+import {
+  buildReportPdf,
+  buildReportRtf,
+  saveReportFile,
+  type ReportExtras,
+  type ReportImages,
+} from '@/lib/thermalReport';
 import {
   CLASSIFICATION_LABELS,
   EMPTY_REPORT,
+  METASHAPE_KIND_LABELS,
+  hasDisplayableImage,
+  parseMetashapeMeta,
+  type FlightSnapshot,
   type ReportAnomalyEntry,
   type ReportImageEntry,
   type Severity,
   type ThermalReport,
   type ThermalReportMeta,
 } from '@/types/thermal';
+import type { Flight } from '@/types';
+
+function flightToSnapshot(f: Flight): FlightSnapshot {
+  return {
+    id: f.id,
+    displayName: f.displayName || f.fileName,
+    startTime: f.startTime,
+    droneModel: f.droneModel,
+    aircraftName: f.aircraftName,
+    durationSecs: f.durationSecs,
+    totalDistance: f.totalDistance,
+    maxAltitude: f.maxAltitude,
+    maxSpeed: f.maxSpeed,
+    homeLat: f.homeLat ?? null,
+    homeLon: f.homeLon ?? null,
+    photoCount: f.photoCount,
+  };
+}
 
 interface Props {
   onClose: () => void;
@@ -37,6 +66,7 @@ const labelCls = 'block text-[11px] font-medium text-gray-400 mb-1';
 
 export function ReportBuilder({ onClose, exportComposedImage }: Props) {
   const { assets, selectedAssetId, anomalies, analysis, annotations } = useThermalStore();
+  const { flights } = useFlightStore();
 
   const [report, setReport] = useState<ThermalReport>({ ...EMPTY_REPORT });
   const [reportName, setReportName] = useState('Inspection Report');
@@ -45,8 +75,24 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const imageAssets = useMemo(() => assets.filter((a) => a.assetType === 'image'), [assets]);
+  // Only displayable images can be embedded (GeoTIFFs need a working preview)
+  const imageAssets = useMemo(() => assets.filter(hasDisplayableImage), [assets]);
+  const orthoAssets = useMemo(
+    () => assets.filter((a) => a.source === 'metashape' && hasDisplayableImage(a)),
+    [assets],
+  );
   const selectedAsset = assets.find((a) => a.id === selectedAssetId) ?? null;
+  const orthoAsset = assets.find((a) => a.id === report.orthoAssetId) ?? null;
+
+  const toggleFlight = (f: Flight) => {
+    const linked = report.linkedFlights.some((s) => s.id === f.id);
+    update(
+      'linkedFlights',
+      linked
+        ? report.linkedFlights.filter((s) => s.id !== f.id)
+        : [...report.linkedFlights, flightToSnapshot(f)],
+    );
+  };
 
   const refreshSavedReports = useCallback(async () => {
     try {
@@ -193,10 +239,14 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
           // fall through to raw file
         }
       }
+      if (!hasDisplayableImage(asset)) return null;
       try {
-        const buf = await thermalApi.readThermalAssetFile(assetId);
+        // The preview endpoint serves GeoTIFF orthomosaics as their PNG
+        // preview and everything else as the original file.
+        const buf = await thermalApi.readThermalAssetPreview(assetId);
         const ext = asset.fileName.toLowerCase().split('.').pop();
-        const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+        const mime =
+          asset.source === 'metashape' || ext === 'png' ? 'image/png' : 'image/jpeg';
         const bytes = new Uint8Array(buf);
         let bin = '';
         const chunk = 0x8000;
@@ -222,6 +272,84 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
     return images;
   }, [report.imagingLog, assetToDataUrl]);
 
+  const collectExtras = useCallback(async (): Promise<ReportExtras> => {
+    const extras: ReportExtras = {};
+    if (report.orthoAssetId != null && orthoAsset) {
+      try {
+        // Orthomosaics render via their PNG preview
+        const buf = await thermalApi.readThermalAssetPreview(report.orthoAssetId);
+        const bytes = new Uint8Array(buf);
+        let bin = '';
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        }
+        extras.orthoDataUrl = `data:image/png;base64,${btoa(bin)}`;
+        const m = parseMetashapeMeta(orthoAsset);
+        if (m?.width && m?.height) {
+          // height/width — used to embed at the true aspect ratio
+          extras.orthoAspect = m.height / m.width;
+        }
+        extras.orthoLabel = [
+          orthoAsset.fileName,
+          m?.width ? `${m.width}×${m.height} px` : null,
+          m?.crs ?? null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+      } catch {
+        // ortho embed is best-effort
+      }
+    }
+    return extras;
+  }, [report.orthoAssetId, orthoAsset]);
+
+  /** All asset ids referenced by this report (for bundle export). */
+  const referencedAssetIds = useCallback((): number[] => {
+    const ids = new Set<number>();
+    for (const e of report.imagingLog) {
+      if (e.thermalAssetId != null) ids.add(e.thermalAssetId);
+      if (e.visualAssetId != null) ids.add(e.visualAssetId);
+    }
+    for (const a of report.anomalies) {
+      if (a.assetId != null) ids.add(a.assetId);
+    }
+    if (report.orthoAssetId != null) ids.add(report.orthoAssetId);
+    // Metashape documents (reports, camera files, point clouds) always travel
+    // with the inspection — they are part of its evidence base.
+    for (const a of assets) {
+      if (a.source === 'metashape') ids.add(a.id);
+    }
+    return [...ids];
+  }, [report, assets]);
+
+  const handleExportBundle = async () => {
+    setBusy('bundle');
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const dest = await save({
+        defaultPath: `${safeName()}.odlbundle`,
+        filters: [{ name: 'Inspection Bundle', extensions: ['odlbundle'] }],
+      });
+      if (!dest) {
+        setBusy(null);
+        return;
+      }
+      await thermalApi.exportThermalBundle({
+        destPath: dest,
+        name: reportName || 'Inspection',
+        reportJson: JSON.stringify(report),
+        assetIds: referencedAssetIds(),
+        flightIds: report.linkedFlights.map((f) => f.id),
+      });
+      setNotice('Inspection bundle exported.');
+    } catch (e) {
+      setNotice(`Bundle export failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const safeName = () =>
     (reportName || 'thermal-report').replace(/[^a-zA-Z0-9-_ ]/g, '').trim().replace(/\s+/g, '_');
 
@@ -229,7 +357,8 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
     setBusy('pdf');
     try {
       const images = await collectImages();
-      const pdf = await buildReportPdf(report, images);
+      const extras = await collectExtras();
+      const pdf = await buildReportPdf(report, images, extras);
       const ok = await saveReportFile(`${safeName()}.pdf`, pdf, 'PDF Report', 'pdf');
       if (ok) setNotice('PDF exported.');
     } catch (e) {
@@ -243,7 +372,8 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
     setBusy('rtf');
     try {
       const images = await collectImages();
-      const rtf = buildReportRtf(report, images);
+      const extras = await collectExtras();
+      const rtf = buildReportRtf(report, images, extras);
       const ok = await saveReportFile(`${safeName()}.rtf`, rtf, 'RTF Report', 'rtf');
       if (ok) setNotice('RTF exported.');
     } catch (e) {
@@ -294,6 +424,14 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
               className="px-3 py-1.5 rounded bg-drone-primary/70 hover:bg-drone-primary text-white text-xs font-medium disabled:opacity-50"
             >
               {busy === 'rtf' ? 'Exporting…' : 'Export RTF'}
+            </button>
+            <button
+              onClick={handleExportBundle}
+              disabled={busy != null}
+              title="Save the complete inspection — report, assets, annotations, networks and linked flight data — as a single portable file"
+              className="px-3 py-1.5 rounded bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-medium disabled:opacity-50"
+            >
+              {busy === 'bundle' ? 'Exporting…' : 'Export Bundle'}
             </button>
             <button onClick={onClose} className="ml-1 text-gray-400 hover:text-white px-2 py-1">
               ✕
@@ -404,11 +542,118 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
             </div>
           </section>
 
-          {/* 2. Imaging log */}
+          {/* Flight data (DJI logs linked to this inspection) */}
+          <section>
+            <h3 className="text-xs font-semibold text-drone-primary uppercase tracking-wide mb-2">
+              2 · Flight Data (DJI)
+            </h3>
+            {flights.length === 0 ? (
+              <p className="text-[11px] text-gray-500">
+                No flights in the log yet — import DJI flight logs from the Individual/Overview
+                views, then link them here.
+              </p>
+            ) : (
+              <>
+                <p className="text-[11px] text-gray-500 mb-2">
+                  Link the flights that produced this inspection's imagery. Their
+                  operations data is embedded in the report and their full telemetry is
+                  included in exported inspection bundles.
+                </p>
+                <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-700 divide-y divide-gray-800">
+                  {flights.map((f) => {
+                    const linked = report.linkedFlights.some((s) => s.id === f.id);
+                    return (
+                      <label
+                        key={f.id}
+                        className={`flex items-center gap-2 px-2.5 py-1.5 text-[11px] cursor-pointer ${
+                          linked ? 'bg-drone-primary/10 text-white' : 'text-gray-400 hover:bg-gray-800/60'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={linked}
+                          onChange={() => toggleFlight(f)}
+                          className="accent-sky-500"
+                        />
+                        <span className="flex-1 truncate">{f.displayName || f.fileName}</span>
+                        <span className="text-gray-500 whitespace-nowrap">
+                          {f.startTime ? f.startTime.slice(0, 10) : ''}
+                          {f.droneModel ? ` · ${f.droneModel}` : ''}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {report.linkedFlights.length > 0 && (
+                  <p className="mt-1.5 text-[10px] text-gray-500">
+                    {report.linkedFlights.length} flight(s) linked
+                    {report.linkedFlights.some((s) => !flights.some((f) => f.id === s.id)) &&
+                      ' (some linked flights are no longer in the log — their snapshots remain in the report)'}
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+
+          {/* Metashape orthomosaic */}
+          <section>
+            <h3 className="text-xs font-semibold text-drone-primary uppercase tracking-wide mb-2">
+              3 · Orthomosaic (Agisoft Metashape)
+            </h3>
+            {orthoAssets.length === 0 ? (
+              <p className="text-[11px] text-gray-500">
+                Import a Metashape orthomosaic (GeoTIFF) into the asset library to embed it
+                here. Processing reports, camera files and point clouds can also be imported
+                — they travel with exported inspection bundles.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={labelCls}>Embedded orthomosaic image</label>
+                  <select
+                    className={inputCls}
+                    value={report.orthoAssetId ?? ''}
+                    onChange={(e) =>
+                      update('orthoAssetId', e.target.value ? Number(e.target.value) : null)
+                    }
+                  >
+                    <option value="">— none —</option>
+                    {orthoAssets.map(assetOption)}
+                  </select>
+                </div>
+                {orthoAsset && (
+                  <div className="text-[10px] text-gray-500 self-end pb-1">
+                    {(() => {
+                      const m = parseMetashapeMeta(orthoAsset);
+                      if (!m) return null;
+                      return (
+                        <>
+                          {METASHAPE_KIND_LABELS[m.kind] ?? m.kind}
+                          {m.width ? ` · ${m.width}×${m.height}` : ''}
+                          {m.crs ? ` · ${m.crs}` : ''}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="mt-2">
+              <label className={labelCls}>Orthomosaic map link (e.g. hosted DJI Terra / Metashape output)</label>
+              <input
+                className={inputCls}
+                value={report.orthomosaicLink}
+                onChange={(e) => update('orthomosaicLink', e.target.value)}
+                placeholder="https://…/stitched-thermal-map"
+              />
+            </div>
+          </section>
+
+          {/* Imaging log */}
           <section>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-semibold text-drone-primary uppercase tracking-wide">
-                2 · Thermal Imaging Log / Comparative Matrix
+                4 · Thermal Imaging Log / Comparative Matrix
               </h3>
               <button
                 onClick={addImagingEntry}
@@ -496,7 +741,7 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
           <section>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-semibold text-drone-primary uppercase tracking-wide">
-                3 · Anomalies & Findings
+                5 · Anomalies & Findings
               </h3>
               <div className="flex gap-1.5">
                 <button
@@ -612,10 +857,10 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
             </div>
           </section>
 
-          {/* 4. Action plan */}
+          {/* Action plan */}
           <section>
             <h3 className="text-xs font-semibold text-drone-primary uppercase tracking-wide mb-2">
-              4 · Action Plan & Repair Prioritization
+              6 · Action Plan & Repair Prioritization
             </h3>
             <textarea
               className={`${inputCls} min-h-[80px]`}
@@ -623,15 +868,6 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
               onChange={(e) => update('actionPlan', e.target.value)}
               placeholder={'1. (High) Repair active moisture intrusion at A-01 …\n2. (Medium) Re-insulate void at A-02 …\n3. Energy-saving upgrades: …'}
             />
-            <div className="mt-2">
-              <label className={labelCls}>Orthomosaic map link (e.g. DJI Terra output)</label>
-              <input
-                className={inputCls}
-                value={report.orthomosaicLink}
-                onChange={(e) => update('orthomosaicLink', e.target.value)}
-                placeholder="https://…/stitched-thermal-map"
-              />
-            </div>
           </section>
         </div>
       </div>

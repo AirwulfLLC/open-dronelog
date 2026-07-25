@@ -400,7 +400,9 @@ impl Database {
                 captured_at     VARCHAR,
                 camera_model    VARCHAR,
                 imported_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                notes           VARCHAR
+                notes           VARCHAR,
+                source          VARCHAR DEFAULT 'thermal',  -- 'thermal' or 'metashape'
+                meta_json       VARCHAR                     -- parsed metadata (kind, preview, CRS…)
             );
 
             -- ============================================================
@@ -435,6 +437,7 @@ impl Database {
         )?;
 
         // Run selective migrations only for missing columns
+        Self::migrate_thermal_assets_table(&conn)?;
         Self::migrate_flights_table(&conn)?;
         Self::migrate_telemetry_table(&conn)?;
         Self::migrate_flight_tags_table(&conn)?;
@@ -2657,6 +2660,27 @@ impl Database {
     // THERMAL: assets / annotations / reports
     // ================================================================
 
+    /// Add columns introduced after the thermal_assets table first shipped.
+    fn migrate_thermal_assets_table(conn: &Connection) -> Result<(), DatabaseError> {
+        // Table may not exist yet on first run — created afterwards in init_schema
+        let cols = match Self::get_table_columns(conn, "thermal_assets") {
+            Ok(c) => c,
+            Err(_) => return Ok(()),
+        };
+        if cols.is_empty() {
+            return Ok(());
+        }
+        if !cols.contains("source") {
+            conn.execute_batch(
+                "ALTER TABLE thermal_assets ADD COLUMN source VARCHAR DEFAULT 'thermal';",
+            )?;
+        }
+        if !cols.contains("meta_json") {
+            conn.execute_batch("ALTER TABLE thermal_assets ADD COLUMN meta_json VARCHAR;")?;
+        }
+        Ok(())
+    }
+
     fn thermal_asset_from_row(row: &duckdb::Row) -> Result<crate::thermal::ThermalAsset, duckdb::Error> {
         Ok(crate::thermal::ThermalAsset {
             id: row.get(0)?,
@@ -2673,12 +2697,15 @@ impl Database {
             camera_model: row.get(11)?,
             imported_at: row.get(12)?,
             notes: row.get(13)?,
+            source: row.get::<_, Option<String>>(14)?.unwrap_or_else(|| "thermal".to_string()),
+            meta_json: row.get(15)?,
         })
     }
 
     const THERMAL_ASSET_COLS: &'static str =
         "id, file_name, stored_path, file_hash, asset_type, is_radiometric, width, height, \
-         gps_lat, gps_lon, captured_at, camera_model, CAST(imported_at AS VARCHAR), notes";
+         gps_lat, gps_lon, captured_at, camera_model, CAST(imported_at AS VARCHAR), notes, \
+         source, meta_json";
 
     /// Insert a new thermal asset row.
     pub fn insert_thermal_asset(&self, a: &crate::thermal::ThermalAsset) -> Result<(), DatabaseError> {
@@ -2686,8 +2713,8 @@ impl Database {
         conn.execute(
             "INSERT INTO thermal_assets \
              (id, file_name, stored_path, file_hash, asset_type, is_radiometric, width, height, \
-              gps_lat, gps_lon, captured_at, camera_model, notes) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              gps_lat, gps_lon, captured_at, camera_model, notes, source, meta_json) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 a.id,
                 a.file_name,
@@ -2702,6 +2729,8 @@ impl Database {
                 a.captured_at,
                 a.camera_model,
                 a.notes,
+                a.source,
+                a.meta_json,
             ],
         )?;
         Ok(())

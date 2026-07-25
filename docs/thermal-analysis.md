@@ -147,6 +147,36 @@ Arrow, text, freehand, ellipse and rectangle tools with color selection,
 select/move, undo, clear, and Delete-key removal. Annotations persist per
 asset in the profile database and are baked into report exports.
 
+### Agisoft Metashape import
+
+The asset importer also accepts Agisoft Metashape exports, which are stored in
+the same per-profile library alongside thermal media:
+
+| File | Handling |
+|---|---|
+| `.tif` / `.tiff` (orthomosaic, DEM) | A PNG preview (max 4096 px) is generated so the GeoTIFF can be viewed and annotated in the studio; the original is kept untouched. |
+| `.pdf` (processing report) | Stored with a metadata card; opens in the system PDF viewer. |
+| `.xml` (camera calibration) | Camera/marker counts and the coordinate system are parsed for display. |
+| `.csv` (camera reference) | Row/column counts parsed. |
+| `.las` / `.laz` / `.ply` / `.obj` (point clouds, models) | Stored; opens in the system default application. |
+| `.kml` / `.kmz` (map overlays) | Stored. |
+
+### Linked DJI flights and inspection bundles
+
+The report builder has a **Flight Data** section for linking the DJI flights
+that produced the inspection imagery — a snapshot of each flight's operations
+data (date, drone, duration, distance, altitude, home position) is embedded
+in the report, and a **Orthomosaic (Agisoft Metashape)** section for
+embedding an imported orthomosaic in the exported document.
+
+**Export Bundle** saves the complete inspection as a single portable
+`.odlbundle` file (gzipped tar): the report, every referenced asset
+(thermal media and all Metashape files, with previews), annotations,
+heat-flow networks, and the linked flights' full telemetry. **Report ▸
+Import inspection bundle…** restores one on any machine or profile — assets
+are deduplicated by content hash and the report is recreated with its
+references intact.
+
 ### Inspection reports (Report ▸ Open report builder…)
 
 Report sections follow a standard building-envelope inspection structure:

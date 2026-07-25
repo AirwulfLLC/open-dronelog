@@ -5,8 +5,12 @@
 //! - `commands`: Tauri commands exposed to the frontend (desktop builds)
 
 pub mod analysis;
+pub mod metashape;
 pub mod network;
 pub mod sdk;
+
+#[cfg(feature = "tauri-app")]
+pub mod bundle;
 
 #[cfg(feature = "tauri-app")]
 pub mod commands;
@@ -36,7 +40,7 @@ pub fn next_id() -> i64 {
 }
 
 /// A thermal asset (imported photo or video) as stored in the database.
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ThermalAsset {
     pub id: i64,
@@ -54,6 +58,16 @@ pub struct ThermalAsset {
     pub camera_model: Option<String>,
     pub imported_at: Option<String>,
     pub notes: Option<String>,
+    /// "thermal" (drone thermal/visual media) or "metashape" (photogrammetry export).
+    #[serde(default = "default_asset_source")]
+    pub source: String,
+    /// Parsed metadata JSON (Metashape kind, preview file, CRS, camera count…).
+    #[serde(default)]
+    pub meta_json: Option<String>,
+}
+
+fn default_asset_source() -> String {
+    "thermal".to_string()
 }
 
 /// Metadata extracted from an image's EXIF block.
