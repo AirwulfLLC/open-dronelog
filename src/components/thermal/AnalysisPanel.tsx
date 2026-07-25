@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useThermalStore } from '@/stores/thermalStore';
+import * as thermalApi from '@/lib/thermalApi';
 import {
   PALETTES,
   drawColorBar,
@@ -367,12 +368,137 @@ export function AnalysisPanel() {
             ))}
           </div>
         )}
+
+        <AiNarrative />
       </Section>
 
       {/* Heat flow network */}
       <Section title="Heat Flow Network (Radiation Exchange)">
         <NetworkPanel />
       </Section>
+    </div>
+  );
+}
+
+const AI_PROVIDER_LABELS: Record<string, string> = {
+  claude: 'Claude',
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+};
+
+/** AI narrative generation — uses the provider + key selected in Settings. */
+function AiNarrative() {
+  const { selectedAssetId, analysis, anomalies, networkResult } = useThermalStore();
+  const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [provider, setProvider] = useState<string>('');
+  const [busy, setBusy] = useState(false);
+  const [narrative, setNarrative] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    thermalApi
+      .thermalAiGetConfig()
+      .then((cfg) => {
+        if (cancelled) return;
+        setProvider(cfg.provider);
+        const keyed = {
+          claude: cfg.hasClaudeKey,
+          openai: cfg.hasOpenaiKey,
+          gemini: cfg.hasGeminiKey,
+        }[cfg.provider];
+        setHasKey(!!keyed);
+      })
+      .catch(() => {
+        if (!cancelled) setHasKey(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Clear stale narrative when the asset changes
+  useEffect(() => {
+    setNarrative(null);
+    setError(null);
+  }, [selectedAssetId]);
+
+  const generate = async () => {
+    if (selectedAssetId == null || !analysis) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const context = {
+        temperatureStats: analysis.stats,
+        measurementParams: analysis.params,
+        detectedAnomalies: anomalies ?? undefined,
+        heatFlowNetwork: networkResult
+          ? { flows: networkResult.flows, balances: networkResult.balances }
+          : undefined,
+      };
+      const text = await thermalApi.thermalAiGenerateFindings(
+        selectedAssetId,
+        JSON.stringify(context),
+      );
+      setNarrative(text);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!analysis) return null;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-700/60">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[11px] font-semibold text-gray-400">
+          AI Narrative{provider ? ` (${AI_PROVIDER_LABELS[provider] ?? provider})` : ''}
+        </span>
+        {narrative && (
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(narrative).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              });
+            }}
+            className="text-[10px] text-gray-500 hover:text-white"
+          >
+            {copied ? '✓ Copied' : 'Copy'}
+          </button>
+        )}
+      </div>
+      {hasKey === false ? (
+        <p className="text-[10px] text-gray-500">
+          Pick an AI provider and add its API key in Settings (below the DJI API key)
+          to generate narrative findings from the image and measured data.
+        </p>
+      ) : (
+        <>
+          <button
+            onClick={generate}
+            disabled={busy || hasKey == null}
+            className="w-full py-1.5 rounded bg-purple-600/70 hover:bg-purple-600 text-white text-xs font-medium disabled:opacity-50"
+          >
+            {busy
+              ? 'Analyzing with AI… (can take a minute)'
+              : narrative
+                ? 'Regenerate narrative'
+                : anomalies
+                  ? 'Generate AI narrative of findings'
+                  : 'Generate AI narrative (runs on image + stats)'}
+          </button>
+          {error && <p className="mt-1.5 text-[10px] text-red-400 whitespace-pre-wrap">{error}</p>}
+          {narrative && (
+            <div className="mt-2 p-2 rounded bg-gray-900/60 border border-gray-700 text-[11px] text-gray-300 whitespace-pre-wrap max-h-64 overflow-y-auto select-text">
+              {narrative}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

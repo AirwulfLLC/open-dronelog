@@ -92,6 +92,25 @@ When range isolation is active, detection is restricted to the isolated band.
 Findings are drawn on the image and listed in the panel, and can be imported
 into a report with one click.
 
+**AI narrative (optional):** the analysis panel can generate a written
+inspection narrative: the image plus the measured statistics, detected
+anomalies, and any heat-flow network results are sent to an AI provider,
+which returns a summary, per-anomaly interpretation, and prioritized
+recommendations. In Settings — the "AI Thermal Analysis" section directly
+below the DJI API key — pick a provider from the dropdown and save its API
+key:
+
+| Provider | Model used | Key from |
+|---|---|---|
+| Claude (Anthropic) | `claude-opus-5` | platform.claude.com |
+| OpenAI (GPT) | `gpt-5` | platform.openai.com/api-keys |
+| Google Gemini | `gemini-2.5-pro` | aistudio.google.com/apikey |
+
+Keys are stored per profile in the local database (one per provider, so
+switching providers keeps each key) and are only ever sent to the selected
+provider's API. Without a key, the feature simply shows a hint and everything
+else works fully offline.
+
 ### Heat flow network (radiation exchange)
 
 A lumped-parameter thermal network solver (SINDA-style) is built into the

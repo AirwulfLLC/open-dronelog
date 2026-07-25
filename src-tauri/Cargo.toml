@@ -83,6 +83,7 @@ reverse_geocoder = "4.1.1"
 # DJI Thermal SDK (libdirp) dynamic loading + thermal asset metadata
 libloading = "0.8"
 kamadak-exif = "0.6"
+base64 = "0.22"
 
 [features]
 default = ["tauri-app"]

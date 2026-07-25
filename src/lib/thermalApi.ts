@@ -137,6 +137,49 @@ export async function detectAnomalies(
   });
 }
 
+// ---------------- AI thermal analysis ----------------
+
+export type ThermalAiProvider = 'claude' | 'openai' | 'gemini';
+
+export interface ThermalAiConfig {
+  provider: ThermalAiProvider;
+  hasClaudeKey: boolean;
+  hasOpenaiKey: boolean;
+  hasGeminiKey: boolean;
+}
+
+export async function thermalAiGetConfig(): Promise<ThermalAiConfig> {
+  return inv<ThermalAiConfig>('thermal_ai_get_config');
+}
+
+export async function thermalAiSetProvider(provider: ThermalAiProvider): Promise<void> {
+  await inv('thermal_ai_set_provider', { provider });
+}
+
+/** True when the currently selected provider has a key configured. */
+export async function thermalAiHasApiKey(): Promise<boolean> {
+  return inv<boolean>('thermal_ai_has_api_key');
+}
+
+export async function thermalAiSetApiKey(
+  provider: ThermalAiProvider,
+  apiKey: string,
+): Promise<void> {
+  await inv('thermal_ai_set_api_key', { provider, apiKey });
+}
+
+export async function thermalAiRemoveApiKey(provider: ThermalAiProvider): Promise<void> {
+  await inv('thermal_ai_remove_api_key', { provider });
+}
+
+/** Generate an AI narrative for the asset from the measured analysis context. */
+export async function thermalAiGenerateFindings(
+  assetId: number,
+  contextJson: string,
+): Promise<string> {
+  return inv<string>('thermal_ai_generate_findings', { assetId, contextJson });
+}
+
 export async function solveThermalNetwork(
   network: ThermalNetworkModel,
   options: NetworkSolveOptions,

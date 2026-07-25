@@ -297,6 +297,364 @@ pub async fn thermal_set_network(
         .map_err(|e| e.to_string())
 }
 
+// ---------------- AI thermal analysis (Claude / OpenAI / Gemini) ----------------
+
+/// Settings-table key for the selected AI provider ("claude" | "openai" | "gemini").
+const THERMAL_AI_PROVIDER_SETTING: &str = "thermal_ai_provider";
+/// Legacy single-key setting from before provider selection existed (Claude).
+const THERMAL_AI_LEGACY_KEY_SETTING: &str = "thermal_ai_api_key";
+
+const AI_PROVIDERS: [&str; 3] = ["claude", "openai", "gemini"];
+
+fn validate_provider(provider: &str) -> Result<(), String> {
+    if AI_PROVIDERS.contains(&provider) {
+        Ok(())
+    } else {
+        Err(format!("Unknown AI provider '{provider}'"))
+    }
+}
+
+fn provider_key_setting(provider: &str) -> String {
+    format!("thermal_ai_api_key_{provider}")
+}
+
+fn get_ai_provider(db: &crate::database::Database) -> String {
+    db.get_setting(THERMAL_AI_PROVIDER_SETTING)
+        .ok()
+        .flatten()
+        .filter(|p| AI_PROVIDERS.contains(&p.as_str()))
+        .unwrap_or_else(|| "claude".to_string())
+}
+
+fn get_ai_key(db: &crate::database::Database, provider: &str) -> Option<String> {
+    let key = db
+        .get_setting(&provider_key_setting(provider))
+        .ok()
+        .flatten()
+        .filter(|k| !k.trim().is_empty());
+    if key.is_some() {
+        return key;
+    }
+    // Fall back to the pre-provider-selection key (was always a Claude key)
+    if provider == "claude" {
+        return db
+            .get_setting(THERMAL_AI_LEGACY_KEY_SETTING)
+            .ok()
+            .flatten()
+            .filter(|k| !k.trim().is_empty());
+    }
+    None
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThermalAiConfig {
+    pub provider: String,
+    pub has_claude_key: bool,
+    pub has_openai_key: bool,
+    pub has_gemini_key: bool,
+}
+
+#[tauri::command]
+pub async fn thermal_ai_get_config(state: State<'_, AppState>) -> Result<ThermalAiConfig, String> {
+    let db = state.db_authenticated()?;
+    Ok(ThermalAiConfig {
+        provider: get_ai_provider(&db),
+        has_claude_key: get_ai_key(&db, "claude").is_some(),
+        has_openai_key: get_ai_key(&db, "openai").is_some(),
+        has_gemini_key: get_ai_key(&db, "gemini").is_some(),
+    })
+}
+
+#[tauri::command]
+pub async fn thermal_ai_set_provider(provider: String, state: State<'_, AppState>) -> Result<(), String> {
+    validate_provider(&provider)?;
+    let db = state.db_authenticated()?;
+    db.set_setting(THERMAL_AI_PROVIDER_SETTING, &provider)
+        .map_err(|e| e.to_string())
+}
+
+/// True when the currently selected provider has a key configured.
+#[tauri::command]
+pub async fn thermal_ai_has_api_key(state: State<'_, AppState>) -> Result<bool, String> {
+    let db = state.db_authenticated()?;
+    let provider = get_ai_provider(&db);
+    Ok(get_ai_key(&db, &provider).is_some())
+}
+
+#[tauri::command]
+pub async fn thermal_ai_set_api_key(
+    provider: String,
+    api_key: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    validate_provider(&provider)?;
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("API key cannot be empty".to_string());
+    }
+    let db = state.db_authenticated()?;
+    db.set_setting(&provider_key_setting(&provider), key)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn thermal_ai_remove_api_key(
+    provider: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    validate_provider(&provider)?;
+    let db = state.db_authenticated()?;
+    db.set_setting(&provider_key_setting(&provider), "")
+        .map_err(|e| e.to_string())?;
+    if provider == "claude" {
+        // Clear the legacy fallback too, or removal would appear to fail
+        let _ = db.set_setting(THERMAL_AI_LEGACY_KEY_SETTING, "");
+    }
+    Ok(())
+}
+
+const AI_SYSTEM_PROMPT: &str =
+    "You are an expert building-envelope thermographer analyzing drone thermal \
+     imagery (DJI radiometric cameras). You write concise, professional \
+     inspection findings. Format all math as plain text — no LaTeX. Keep \
+     responses focused and brief; lead with the most important finding.";
+
+fn ai_user_prompt(file_name: &str, context_json: &str) -> String {
+    format!(
+        "This is a thermal inspection image ({file_name}). Measured analysis data \
+         from the DJI Thermal SDK (temperatures in °C):\n\n{context_json}\n\n\
+         Write a thermal inspection narrative with these sections:\n\
+         1. Summary — one short paragraph on the overall thermal condition.\n\
+         2. Findings — for each detected anomaly region (reference them by \
+         their id numbers), interpret what the temperature variance most \
+         likely indicates (insulation gap, air leak, moisture, thermal \
+         bridging, electrical, HVAC…), including the ΔT versus baseline.\n\
+         3. Recommendations — prioritized repair actions ordered by severity, \
+         plus any energy-saving upgrades.\n\
+         Be specific and reference the measured values. If the data suggests \
+         a benign explanation (solar loading, reflections, sky background), \
+         say so rather than inventing defects."
+    )
+}
+
+/// Generate an AI narrative analysis of a thermal image via the provider
+/// selected in Settings (Claude, OpenAI, or Gemini). `context_json` carries
+/// the measured stats/anomalies/network results the frontend already has;
+/// the stored asset image is attached for vision.
+#[tauri::command]
+pub async fn thermal_ai_generate_findings(
+    asset_id: i64,
+    context_json: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let db = state.db_authenticated()?;
+    let provider = get_ai_provider(&db);
+    let api_key = get_ai_key(&db, &provider).ok_or_else(|| {
+        format!(
+            "No API key configured for the selected AI provider ({provider}) — add one in \
+             Settings (below the DJI API key)."
+        )
+    })?;
+
+    let (asset, bytes) = load_asset_bytes(&db, asset_id)?;
+    let media_type = if asset.file_name.to_lowercase().ends_with(".png") {
+        "image/png"
+    } else {
+        "image/jpeg"
+    };
+    use base64::Engine as _;
+    let image_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let user_text = ai_user_prompt(&asset.file_name, &context_json);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    match provider.as_str() {
+        "claude" => generate_claude(&client, &api_key, media_type, &image_b64, &user_text).await,
+        "openai" => generate_openai(&client, &api_key, media_type, &image_b64, &user_text).await,
+        "gemini" => generate_gemini(&client, &api_key, media_type, &image_b64, &user_text).await,
+        other => Err(format!("Unknown AI provider '{other}'")),
+    }
+}
+
+async fn generate_claude(
+    client: &reqwest::Client,
+    api_key: &str,
+    media_type: &str,
+    image_b64: &str,
+    user_text: &str,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "model": "claude-opus-5",
+        "max_tokens": 16000,
+        "system": AI_SYSTEM_PROMPT,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": image_b64}
+                },
+                {"type": "text", "text": user_text}
+            ]
+        }]
+    });
+
+    let resp = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Claude request failed: {e}"))?;
+
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Claude response: {e}"))?;
+    if !status.is_success() {
+        let msg = json["error"]["message"].as_str().unwrap_or("unknown error");
+        return Err(format!("Claude request failed ({status}): {msg}"));
+    }
+    // Check stop_reason before reading content — safety classifiers can
+    // decline with an HTTP 200 and an empty/partial content array.
+    if json["stop_reason"].as_str() == Some("refusal") {
+        return Err(
+            "Claude declined to analyze this image (safety refusal). Try again or adjust \
+             the image."
+                .to_string(),
+        );
+    }
+    let text = json["content"]
+        .as_array()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|b| b["type"] == "text")
+                .filter_map(|b| b["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        return Err("Claude returned an empty response".to_string());
+    }
+    Ok(text)
+}
+
+async fn generate_openai(
+    client: &reqwest::Client,
+    api_key: &str,
+    media_type: &str,
+    image_b64: &str,
+    user_text: &str,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "model": "gpt-5",
+        "max_completion_tokens": 16000,
+        "messages": [
+            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "user", "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": format!("data:{media_type};base64,{image_b64}")}
+                },
+                {"type": "text", "text": user_text}
+            ]}
+        ]
+    });
+
+    let resp = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI request failed: {e}"))?;
+
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse OpenAI response: {e}"))?;
+    if !status.is_success() {
+        let msg = json["error"]["message"].as_str().unwrap_or("unknown error");
+        return Err(format!("OpenAI request failed ({status}): {msg}"));
+    }
+    let choice = &json["choices"][0];
+    if choice["finish_reason"].as_str() == Some("content_filter") {
+        return Err("OpenAI declined to analyze this image (content filter).".to_string());
+    }
+    let text = choice["message"]["content"].as_str().unwrap_or_default();
+    if text.trim().is_empty() {
+        return Err("OpenAI returned an empty response".to_string());
+    }
+    Ok(text.to_string())
+}
+
+async fn generate_gemini(
+    client: &reqwest::Client,
+    api_key: &str,
+    media_type: &str,
+    image_b64: &str,
+    user_text: &str,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "system_instruction": {"parts": [{"text": AI_SYSTEM_PROMPT}]},
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"inline_data": {"mime_type": media_type, "data": image_b64}},
+                {"text": user_text}
+            ]
+        }],
+        "generationConfig": {"maxOutputTokens": 16000}
+    });
+
+    let resp = client
+        .post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent")
+        .header("x-goog-api-key", api_key)
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {e}"))?;
+
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Gemini response: {e}"))?;
+    if !status.is_success() {
+        let msg = json["error"]["message"].as_str().unwrap_or("unknown error");
+        return Err(format!("Gemini request failed ({status}): {msg}"));
+    }
+    if let Some(reason) = json["promptFeedback"]["blockReason"].as_str() {
+        return Err(format!("Gemini declined to analyze this image ({reason})."));
+    }
+    let text = json["candidates"][0]["content"]["parts"]
+        .as_array()
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|p| p["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        return Err("Gemini returned an empty response".to_string());
+    }
+    Ok(text)
+}
+
 // ---------------- Annotations ----------------
 
 #[tauri::command]
