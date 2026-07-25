@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "../deps/dji_thermal_sdk/tsdk-core/lib/windows/release_x64/*.dll": "tsdk/",
+      "../deps/dji_thermal_sdk/tsdk-core/lib/windows/release_x64/*.ini": "tsdk/"
+    }
+  }
+}
