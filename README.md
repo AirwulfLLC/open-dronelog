@@ -215,6 +215,15 @@ If you are using Open Drone Log for a team with multiple drone operators, and wa
     </a>
 </p>
 
+If you are looking for a managed server for your larger team, and need more storage and AI-assisted data analysis for pattern identification and risk management from incident or failures from the captured data, [Zenith hosting](https://zenith.hosting/apps/open-dronelog) is a good choice for a fixed price of **$10/month**. There is no user or log number limit.
+
+<p align="center">
+    <a href="https://zenith.hosting/host/open-dronelog">
+        <img alt="Deploy with Zenith"
+       src="https://cdn.zenith.hosting/buttons/deploy-with-zenith.svg" height="48"/>
+    </a>
+</p>
+
 ### macOS Users: "Damaged File" Error Fix
 
 <img width="320" height="311" alt="image" src="https://github.com/user-attachments/assets/2787ffff-9961-433c-898a-b548c738f1a2" />
