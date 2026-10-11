@@ -1,15 +1,22 @@
 /**
  * ReportBuilder — modal for composing thermal inspection reports.
  *
- * Sections: Header Data · Summary · Thermal Imaging Log (side-by-side
- * visual/IR + LRF data) · Thermal Anomaly Log · Action Plan · Orthomosaic
- * link. Reports persist to the profile database and export as PDF or RTF.
+ * Sections: Header Data · Summary · Flight Data · Orthomosaic · Thermal
+ * Imaging Log (side-by-side visual/IR + LRF data) · Photogrammetry Imagery ·
+ * Thermal Anomaly Log · Action Plan. Reports persist to the profile database
+ * and export as PDF or RTF.
+ *
+ * The Photogrammetry Imagery figures are the photogrammetry store's report
+ * queue (shared with the Photogrammetry tab); saving a report snapshots the
+ * queue into it and loading a saved report restores the queue from it.
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useThermalStore } from '@/stores/thermalStore';
+import { sanitizeQueueEntries, usePhotogrammetryStore } from '@/stores/photogrammetryStore';
 import { useFlightStore } from '@/stores/flightStore';
 import * as thermalApi from '@/lib/thermalApi';
+import { buildPhotogrammetryFigures, fmtFrameTime } from '@/lib/photogrammetryExport';
 import {
   buildReportPdf,
   buildReportRtf,
@@ -51,6 +58,8 @@ function flightToSnapshot(f: Flight): FlightSnapshot {
 
 interface Props {
   onClose: () => void;
+  /** Thermal Studio's live composed view of the selected asset (palette +
+   *  annotations). Other hosts pass a ref whose current is null. */
   exportComposedImage: React.MutableRefObject<(() => Promise<string | null>) | null>;
 }
 
@@ -68,6 +77,15 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
   const { assets, selectedAssetId, anomalies, analysis, annotations, valueSuffix } =
     useThermalStore();
   const { flights } = useFlightStore();
+  const {
+    queue: photoQueue,
+    queueLoaded: photoQueueLoaded,
+    loadQueue: loadPhotoQueue,
+    setQueue: setPhotoQueue,
+    removeFromReport,
+    moveEntry,
+    updateEntry,
+  } = usePhotogrammetryStore();
 
   const [report, setReport] = useState<ThermalReport>({ ...EMPTY_REPORT });
   const [reportName, setReportName] = useState('Inspection Report');
@@ -111,8 +129,20 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
     );
   }, [refreshSavedReports]);
 
+  // The queue lives in its own store; make sure it is loaded even when the
+  // Photogrammetry tab was never opened this session.
+  useEffect(() => {
+    if (!photoQueueLoaded) loadPhotoQueue();
+  }, [photoQueueLoaded, loadPhotoQueue]);
+
   const update = <K extends keyof ThermalReport>(key: K, value: ThermalReport[K]) =>
     setReport((r) => ({ ...r, [key]: value }));
+
+  /** The report as saved/exported: form fields plus the live photogrammetry queue. */
+  const serializableReport = useCallback(
+    (): ThermalReport => ({ ...report, photogrammetry: photoQueue }),
+    [report, photoQueue],
+  );
 
   // ---- Imaging log ----
   const addImagingEntry = () => {
@@ -196,7 +226,11 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
   const handleSave = async () => {
     setBusy('save');
     try {
-      const id = await thermalApi.saveThermalReport(reportId, reportName, JSON.stringify(report));
+      const id = await thermalApi.saveThermalReport(
+        reportId,
+        reportName,
+        JSON.stringify(serializableReport()),
+      );
       setReportId(id);
       await refreshSavedReports();
       setNotice('Report saved.');
@@ -211,8 +245,13 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
     setBusy('load');
     try {
       const json = await thermalApi.getThermalReport(meta.id);
-      const parsed = JSON.parse(json) as ThermalReport;
-      setReport({ ...EMPTY_REPORT, ...parsed });
+      const parsed = JSON.parse(json) as Partial<ThermalReport>;
+      // The queue store is canonical for photogrammetry figures: restore it
+      // from the saved report (reports predating the section leave it alone).
+      if (Array.isArray(parsed.photogrammetry)) {
+        setPhotoQueue(sanitizeQueueEntries(parsed.photogrammetry));
+      }
+      setReport({ ...EMPTY_REPORT, ...parsed, photogrammetry: [] });
       setReportName(meta.name);
       setReportId(meta.id);
     } catch (e) {
@@ -310,8 +349,14 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
         // ortho embed is best-effort
       }
     }
+    if (photoQueue.length > 0) {
+      // Debounced annotation edits from the Photogrammetry tab must be in the
+      // DB before the figures are composed from it.
+      await usePhotogrammetryStore.getState().flushAnnotations();
+      extras.photogrammetry = await buildPhotogrammetryFigures(photoQueue, assets);
+    }
     return extras;
-  }, [report.orthoAssetId, orthoAsset]);
+  }, [report.orthoAssetId, orthoAsset, photoQueue, assets]);
 
   /** All asset ids referenced by this report (for bundle export). */
   const referencedAssetIds = useCallback((): number[] => {
@@ -323,6 +368,7 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
     for (const a of report.anomalies) {
       if (a.assetId != null) ids.add(a.assetId);
     }
+    for (const p of photoQueue) ids.add(p.assetId);
     if (report.orthoAssetId != null) ids.add(report.orthoAssetId);
     // Metashape documents (reports, camera files, point clouds) always travel
     // with the inspection — they are part of its evidence base.
@@ -330,7 +376,7 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
       if (a.source === 'metashape') ids.add(a.id);
     }
     return [...ids];
-  }, [report, assets]);
+  }, [report, assets, photoQueue]);
 
   const handleExportBundle = async () => {
     setBusy('bundle');
@@ -347,7 +393,7 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
       await thermalApi.exportThermalBundle({
         destPath: dest,
         name: reportName || 'Inspection',
-        reportJson: JSON.stringify(report),
+        reportJson: JSON.stringify(serializableReport()),
         assetIds: referencedAssetIds(),
         flightIds: report.linkedFlights.map((f) => f.id),
       });
@@ -367,7 +413,7 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
     try {
       const images = await collectImages();
       const extras = await collectExtras();
-      const pdf = await buildReportPdf(report, images, extras);
+      const pdf = await buildReportPdf(serializableReport(), images, extras);
       const ok = await saveReportFile(`${safeName()}.pdf`, pdf, 'PDF Report', 'pdf');
       if (ok) setNotice('PDF exported.');
     } catch (e) {
@@ -382,7 +428,7 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
     try {
       const images = await collectImages();
       const extras = await collectExtras();
-      const rtf = buildReportRtf(report, images, extras);
+      const rtf = buildReportRtf(serializableReport(), images, extras);
       const ok = await saveReportFile(`${safeName()}.rtf`, rtf, 'RTF Report', 'rtf');
       if (ok) setNotice('RTF exported.');
     } catch (e) {
@@ -486,6 +532,18 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
                 ))}
                 <button
                   onClick={() => {
+                    // Loading a report replaces the photogrammetry queue, so a
+                    // blank report should offer the symmetric reset — but the
+                    // queue may be imagery the user staged for this new report.
+                    if (
+                      photoQueue.length > 0 &&
+                      window.confirm(
+                        `Also clear the ${photoQueue.length} queued photogrammetry figure(s)?\n\n` +
+                          'Choose Cancel to keep them for the new report.',
+                      )
+                    ) {
+                      setPhotoQueue([]);
+                    }
                     setReport({ ...EMPTY_REPORT, inspectionDate: new Date().toISOString().slice(0, 10) });
                     setReportId(null);
                     setReportName('Inspection Report');
@@ -746,11 +804,82 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
             </div>
           </section>
 
-          {/* 3. Anomaly log */}
+          {/* Photogrammetry imagery (queue shared with the Photogrammetry tab) */}
           <section>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-semibold text-drone-primary uppercase tracking-wide">
-                5 · Anomalies & Findings
+                5 · Photogrammetry Imagery
+              </h3>
+              <span className="text-[10px] text-gray-500">
+                {photoQueue.length} figure{photoQueue.length === 1 ? '' : 's'} · listed order = report order
+              </span>
+            </div>
+            {photoQueue.length === 0 ? (
+              <p className="text-[11px] text-gray-500">
+                Select photos/videos in the Photogrammetry tab and add them to the report.
+                They export here in the chosen order, each with its annotations and caption.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {photoQueue.map((entry, i) => {
+                  const a = assets.find((x) => x.id === entry.assetId);
+                  const isVideo = a?.assetType === 'video';
+                  return (
+                    <div
+                      key={entry.id}
+                      className="flex items-center gap-2 p-2 rounded-lg bg-gray-800/50 border border-gray-700"
+                    >
+                      <span className="w-6 text-center text-[11px] font-mono text-gray-400">{i + 1}</span>
+                      <span className="text-xs">{a ? (isVideo ? '🎬' : '📷') : '⚠️'}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] text-gray-300 truncate">
+                          {a?.fileName ?? 'Asset no longer in the library'}
+                          {isVideo ? ` · frame ${fmtFrameTime(entry.frameTimeS)}` : ''}
+                        </div>
+                        <input
+                          className={`${inputCls} mt-1`}
+                          value={entry.caption}
+                          onChange={(e) => updateEntry(entry.id, { caption: e.target.value })}
+                          placeholder={`Figure ${i + 1} caption`}
+                        />
+                      </div>
+                      <div className="flex flex-col items-center text-xs">
+                        <button
+                          onClick={() => moveEntry(entry.id, i - 1)}
+                          disabled={i === 0}
+                          className="text-gray-500 hover:text-white disabled:opacity-20 leading-none"
+                          title="Move up"
+                        >
+                          ▲
+                        </button>
+                        <button
+                          onClick={() => moveEntry(entry.id, i + 1)}
+                          disabled={i === photoQueue.length - 1}
+                          className="text-gray-500 hover:text-white disabled:opacity-20 leading-none"
+                          title="Move down"
+                        >
+                          ▼
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => removeFromReport(entry.id)}
+                        className="text-gray-500 hover:text-red-400 text-xs"
+                        title="Remove from report"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* Anomaly log */}
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold text-drone-primary uppercase tracking-wide">
+                6 · Anomalies & Findings
               </h3>
               <div className="flex gap-1.5">
                 <button
@@ -869,7 +998,7 @@ export function ReportBuilder({ onClose, exportComposedImage }: Props) {
           {/* Action plan */}
           <section>
             <h3 className="text-xs font-semibold text-drone-primary uppercase tracking-wide mb-2">
-              6 · Action Plan & Repair Prioritization
+              7 · Action Plan & Repair Prioritization
             </h3>
             <textarea
               className={`${inputCls} min-h-[80px]`}

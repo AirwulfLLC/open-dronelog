@@ -147,6 +147,30 @@ Arrow, text, freehand, ellipse and rectangle tools with color selection,
 select/move, undo, clear, and Delete-key removal. Annotations persist per
 asset in the profile database and are baked into report exports.
 
+### Photogrammetry tab (report imagery)
+
+The **Photogrammetry** dashboard tab assembles the visual imagery of an
+inspection report. It has its own library (photos `.jpg`/`.png`, videos
+`.mp4`/`.mov`/`.avi`; imported by file dialog or drag-and-drop) kept separate
+from the thermal assets, the same annotation tools as the Thermal Studio, and
+a **Report images** queue:
+
+- **Select and add** — check one or more library items (or just select one)
+  and press **Add to report**; each becomes a numbered figure. The queue
+  order **is** the figure order in the exported report: drag the ⋮⋮ handle
+  or use ▲▼ to reorder, and give each figure a caption.
+- **Videos** — *Add frame … to report* queues the frame at the current
+  playback position (a video can appear several times with different frames;
+  *set to current* re-snaps a queued frame). *Capture frame* saves the frame
+  as a new photo in the library.
+- **Annotations** drawn on a photo or video are stored with it and burned
+  into its report figure (video frames are extracted and annotated at export
+  time, downscaled to 2000 px on the long edge).
+- The queue persists per profile, so a report can be assembled over several
+  sessions. **Save** in the report builder snapshots it into the saved
+  report; loading a saved report restores it. Queued media and annotations
+  travel in exported inspection bundles.
+
 ### Agisoft Metashape import
 
 The asset importer also accepts Agisoft Metashape exports, which are stored in
@@ -208,13 +232,16 @@ Report sections follow a standard building-envelope inspection structure:
    (Zoom/Wide) and Thermal (Infrared) images with captions and LRF
    (laser rangefinder) data per pair. The currently selected asset exports
    with its palette rendering and annotations.
-4. **Thermal Anomaly Log** — unique IDs, location + geotag
+4. **Photogrammetry Imagery** — the Photogrammetry tab's queued figures, in
+   queue order, each with its annotations, caption and provenance line (file,
+   capture time, camera, position; video frame time).
+5. **Thermal Anomaly Log** — unique IDs, location + geotag
    (latitude/longitude), T_max/T_min, reference baseline, ΔT, severity grade
    and defect classification. Detected anomalies can be imported
    automatically.
-5. **Action Plan & Repair Prioritization** — free-form plan plus an automatic
+6. **Action Plan & Repair Prioritization** — free-form plan plus an automatic
    priority summary derived from severity grades.
-6. **Orthomosaic Map Link** — link to a stitched thermal map (e.g. DJI Terra).
+7. **Orthomosaic Map Link** — link to a stitched thermal map (e.g. DJI Terra).
 
 Reports are saved per profile and export as **PDF** (A4, paginated, with
 embedded images and a severity table) or **RTF** (opens in Word/LibreOffice,

@@ -401,7 +401,7 @@ impl Database {
                 camera_model    VARCHAR,
                 imported_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 notes           VARCHAR,
-                source          VARCHAR DEFAULT 'thermal',  -- 'thermal' or 'metashape'
+                source          VARCHAR DEFAULT 'thermal',  -- 'thermal', 'metashape' or 'photogrammetry'
                 meta_json       VARCHAR                     -- parsed metadata (kind, preview, CRS…)
             );
 

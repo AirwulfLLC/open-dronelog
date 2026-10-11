@@ -5,6 +5,7 @@
 
 import type { ThermalReport, ReportAnomalyEntry, ReportImageEntry } from '@/types/thermal';
 import { CLASSIFICATION_LABELS } from '@/types/thermal';
+import type { PhotogrammetryFigure } from '@/lib/photogrammetryExport';
 
 declare const __APP_VERSION__: string;
 
@@ -21,7 +22,12 @@ export interface ReportExtras {
   orthoLabel?: string;
   /** height/width of the orthomosaic — preserves the true aspect ratio. */
   orthoAspect?: number;
+  /** Composed Photogrammetry Imagery figures, in report order. */
+  photogrammetry?: PhotogrammetryFigure[];
 }
+
+/** Tallest a photogrammetry figure may be (mm) — two 4:3 figures per A4 page. */
+const PHOTO_FIGURE_MAX_H_MM = 92;
 
 function fmtDuration(secs: number | null): string {
   if (secs == null || Number.isNaN(secs)) return '—';
@@ -239,12 +245,16 @@ export async function buildReportPdf(
     const imgPair = images[entry.id] ?? { thermal: null, visual: null };
     const colW = (contentW - 6) / 2;
     const imgH = colW * 0.75;
-    checkPage(imgH + 26);
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
-    doc.text(`${i + 1}. ${entry.caption || 'Imaging pair'}`, margin, y);
-    y += 5;
+    const pairTitle = doc.splitTextToSize(
+      `${i + 1}. ${entry.caption || 'Imaging pair'}`,
+      contentW,
+    ) as string[];
+    checkPage(imgH + 21 + pairTitle.length * 5);
+    doc.text(pairTitle, margin, y);
+    y += pairTitle.length * 5;
 
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
@@ -286,6 +296,62 @@ export async function buildReportPdf(
       y += Math.max(4, lines.length * 4);
     }
     y += 4;
+  }
+
+  // ---- Photogrammetry imagery ----
+  const figures = extras.photogrammetry ?? [];
+  if (figures.length > 0) {
+    heading(`${sec++}. Photogrammetry Imagery`);
+    figures.forEach((fig, i) => {
+      const aspect = fig.aspect > 0 ? fig.aspect : 0.75;
+      let imgW = contentW;
+      let imgH = imgW * aspect;
+      if (imgH > PHOTO_FIGURE_MAX_H_MM) {
+        imgH = PHOTO_FIGURE_MAX_H_MM;
+        imgW = imgH / aspect;
+      }
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(0, 0, 0);
+      const captionLines = doc.splitTextToSize(
+        `Figure ${i + 1}. ${fig.caption.trim() || 'Untitled'}`,
+        contentW,
+      ) as string[];
+      checkPage(imgH + 13 + captionLines.length * 5);
+      doc.text(captionLines, margin, y);
+      y += captionLines.length * 5;
+      const x = margin + (contentW - imgW) / 2;
+      let drawn = false;
+      if (fig.dataUrl) {
+        try {
+          const fmt = fig.dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+          doc.addImage(fig.dataUrl, fmt, x, y, imgW, imgH, undefined, 'FAST');
+          drawn = true;
+        } catch {
+          // fall through to the placeholder
+        }
+      }
+      if (!drawn) {
+        doc.setDrawColor(180, 180, 180);
+        doc.rect(x, y, imgW, imgH);
+        doc.setFontSize(8);
+        doc.setTextColor(150, 150, 150);
+        doc.text('Image unavailable', x + imgW / 2, y + imgH / 2, { align: 'center' });
+        doc.setTextColor(0, 0, 0);
+      }
+      y += imgH + 3;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(110, 110, 110);
+      const lines = doc.splitTextToSize(fig.details, contentW) as string[];
+      for (const line of lines) {
+        checkPage(4.5);
+        doc.text(line, margin, y);
+        y += 4;
+      }
+      doc.setTextColor(0, 0, 0);
+      y += 5;
+    });
   }
 
   // ---- Anomaly log ----
@@ -555,6 +621,28 @@ export function buildReportRtf(
       kv('LRF / Range Data', entry.lrfData);
     }
   });
+
+  const figures = extras.photogrammetry ?? [];
+  if (figures.length > 0) {
+    heading(`${sec++}. Photogrammetry Imagery`);
+    figures.forEach((fig, i) => {
+      sub(`Figure ${i + 1}. ${fig.caption.trim() || 'Untitled'}`);
+      if (fig.dataUrl) {
+        // ~16cm wide (9072 twips), height per aspect, capped at ~12cm
+        const aspect = fig.aspect > 0 ? fig.aspect : 0.75;
+        let wTw = 9072;
+        let hTw = Math.round(wTw * aspect);
+        if (hTw > 6800) {
+          hTw = 6800;
+          wTw = Math.round(hTw / aspect);
+        }
+        parts.push(`{\\pard\\sa60 ${dataUrlToRtfPict(fig.dataUrl, wTw, hTw)}\\par}`);
+      } else {
+        para('(image unavailable)');
+      }
+      parts.push(`{\\pard\\sa160\\fs16\\cf3 ${rtfEscape(fig.details)}\\par}`);
+    });
+  }
 
   heading(`${sec++}. Thermal Anomaly Log`);
   if (report.anomalies.length === 0) {

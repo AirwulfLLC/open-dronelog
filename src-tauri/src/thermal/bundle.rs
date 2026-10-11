@@ -246,6 +246,13 @@ fn remap_report_ids(report: &mut serde_json::Value, map: &std::collections::Hash
             }
         }
     }
+    if let Some(entries) = report.get_mut("photogrammetry").and_then(|v| v.as_array_mut()) {
+        for e in entries {
+            if let Some(v) = e.get_mut("assetId") {
+                remap(v);
+            }
+        }
+    }
     if let Some(v) = report.get_mut("orthoAssetId") {
         remap(v);
     }
@@ -502,4 +509,33 @@ pub async fn thermal_import_bundle(
 
     cleanup(&tmp_dir);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remap_report_ids;
+    use std::collections::HashMap;
+
+    #[test]
+    fn remaps_every_asset_reference_in_a_report() {
+        let mut report = serde_json::json!({
+            "imagingLog": [{ "thermalAssetId": 1, "visualAssetId": 2 }],
+            "anomalies": [{ "assetId": 1 }],
+            "photogrammetry": [
+                { "id": "p1", "assetId": 2, "caption": "" },
+                { "id": "p2", "assetId": 3, "caption": "", "frameTimeS": 4.5 }
+            ],
+            "orthoAssetId": 4
+        });
+        let map: HashMap<i64, i64> = [(1, 10), (2, 20), (4, 40)].into_iter().collect();
+        remap_report_ids(&mut report, &map);
+        assert_eq!(report["imagingLog"][0]["thermalAssetId"], 10);
+        assert_eq!(report["imagingLog"][0]["visualAssetId"], 20);
+        assert_eq!(report["anomalies"][0]["assetId"], 10);
+        assert_eq!(report["photogrammetry"][0]["assetId"], 20);
+        // An asset that was not in the bundle must become null, never a dangling id
+        assert!(report["photogrammetry"][1]["assetId"].is_null());
+        assert_eq!(report["photogrammetry"][1]["frameTimeS"], 4.5);
+        assert_eq!(report["orthoAssetId"], 40);
+    }
 }

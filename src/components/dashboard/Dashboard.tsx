@@ -21,6 +21,7 @@ import { FlightMessagesModal } from './FlightMessagesModal';
 import { Overview } from './Overview';
 import { ProfileSelector } from './ProfileSelector';
 import { ThermalStudio } from '@/components/thermal/ThermalStudio';
+import { PhotogrammetryStudio } from '@/components/photogrammetry/PhotogrammetryStudio';
 import { isWebMode } from '@/lib/api';
 import { useIsMobileRuntime } from '@/hooks/platform/useIsMobileRuntime';
 
@@ -46,7 +47,7 @@ export function Dashboard() {
   const { t } = useTranslation();
   const [showSettings, setShowSettings] = useState(false);
   const [showMessagesModal, setShowMessagesModal] = useState(false);
-  const [activeView, setActiveView] = useState<'flights' | 'overview' | 'thermal'>('overview');
+  const [activeView, setActiveView] = useState<'flights' | 'overview' | 'thermal' | 'photogrammetry'>('overview');
   const [topSidebarFlightId, setTopSidebarFlightId] = useState<number | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     if (typeof localStorage !== 'undefined') {
@@ -346,8 +347,9 @@ export function Dashboard() {
             </div>
           </div>
 
-          {/* View Toggle */}
-          <div className="px-4 py-2 border-b border-gray-700">
+          {/* View Toggle — flight views + profile on the first row, the
+              analysis studios on the second */}
+          <div className="px-4 py-2 border-b border-gray-700 space-y-2">
             <div className="flex gap-2">
               <button
                 onClick={() => {
@@ -382,6 +384,9 @@ export function Dashboard() {
               >
                 {t('dashboard.overview')}
               </button>
+              <ProfileSelector />
+            </div>
+            <div className="flex gap-2">
               <button
                 onClick={() => {
                   setActiveView('thermal');
@@ -397,7 +402,21 @@ export function Dashboard() {
               >
                 {t('dashboard.thermal', 'Thermal')}
               </button>
-              <ProfileSelector />
+              <button
+                onClick={() => {
+                  setActiveView('photogrammetry');
+                  if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                    setIsSidebarHidden(true);
+                  }
+                }}
+                className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${activeView === 'photogrammetry'
+                  ? 'bg-drone-primary/20 border-drone-primary text-white'
+                  : 'border-gray-700 text-gray-400 hover:text-white'
+                  }`}
+                title={t('dashboard.photogrammetryTitle', 'Photogrammetry imagery for inspection reports')}
+              >
+                {t('dashboard.photogrammetry', 'Photogrammetry')}
+              </button>
             </div>
           </div>
 
@@ -515,7 +534,7 @@ export function Dashboard() {
           {/* Flight List */}
           <div className="flex-1 min-h-0 flex flex-col">
             <FlightList
-              activeView={activeView === 'thermal' ? 'overview' : activeView}
+              activeView={activeView === 'thermal' || activeView === 'photogrammetry' ? 'overview' : activeView}
               onTopFlightChange={setTopSidebarFlightId}
               onFiltersExpanded={() => setIsImporterCollapsed(true)}
               onSelectFlight={(flightId) => {
@@ -667,6 +686,10 @@ export function Dashboard() {
         ) : activeView === 'thermal' ? (
           <div className="w-full h-full relative">
             <ThermalStudio />
+          </div>
+        ) : activeView === 'photogrammetry' ? (
+          <div className="w-full h-full relative">
+            <PhotogrammetryStudio />
           </div>
         ) : activeView === 'overview' ? (
           <div className="w-full h-full overflow-auto">

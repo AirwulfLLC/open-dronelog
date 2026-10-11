@@ -47,21 +47,44 @@ pub(crate) fn sanitize_file_name(name: &str) -> String {
         .collect()
 }
 
+/// Asset source the caller may force instead of auto-classification. Only the
+/// photogrammetry library uses this: its photos/videos are plain visual media
+/// that must never be probed as radiometric or mixed into the thermal library.
+const SOURCE_PHOTOGRAMMETRY: &str = "photogrammetry";
+
+fn validate_source_override(source: Option<&str>) -> Result<Option<&str>, String> {
+    match source {
+        None | Some("") => Ok(None),
+        Some(SOURCE_PHOTOGRAMMETRY) => Ok(Some(SOURCE_PHOTOGRAMMETRY)),
+        Some(other) => Err(format!("Unknown asset source: {other}")),
+    }
+}
+
 /// Shared import logic for both path-based and byte-based imports.
 /// Accepts drone thermal/visual media (jpg/png/mp4…) and Agisoft Metashape
 /// exports (GeoTIFF orthomosaics/DEMs, processing PDFs, camera XML/CSV,
-/// point clouds, KML/KMZ overlays).
+/// point clouds, KML/KMZ overlays). `source_override` = "photogrammetry"
+/// files the media in the photogrammetry library instead (images/videos only).
 fn import_asset_impl(
     state: &State<'_, AppState>,
     file_name: &str,
     bytes: Vec<u8>,
+    source_override: Option<&str>,
 ) -> Result<ThermalAsset, String> {
     let db = state.db_authenticated()?;
+    let source_override = validate_source_override(source_override)?;
 
     // Classify: thermal media first, then Metashape artifacts
-    let (asset_type, source, metashape_kind) = match super::asset_type_for(file_name) {
-        Some(t) => (t, "thermal", None),
-        None => match super::metashape::detect_kind(file_name) {
+    let (asset_type, source, metashape_kind) = match (source_override, super::asset_type_for(file_name)) {
+        (Some(forced), Some(t)) => (t, forced, None),
+        (Some(_), None) => {
+            return Err(format!(
+                "Unsupported file type: {file_name} (photogrammetry imports accept jpg/png photos \
+                 and mp4/mov/avi videos)"
+            ))
+        }
+        (None, Some(t)) => (t, "thermal", None),
+        (None, None) => match super::metashape::detect_kind(file_name) {
             Some((kind, viewer_type)) => (viewer_type, "metashape", Some(kind)),
             None => {
                 return Err(format!(
@@ -97,7 +120,9 @@ fn import_asset_impl(
         }
     }
 
-    let exif = if source == "thermal" && asset_type == "image" {
+    // Visual media (thermal library or photogrammetry) carries camera EXIF;
+    // Metashape exports do not.
+    let exif = if source != "metashape" && asset_type == "image" {
         super::extract_exif(&bytes)
     } else {
         super::ExifMeta::default()
@@ -270,6 +295,7 @@ fn load_measurement(
 #[tauri::command]
 pub async fn thermal_import_asset(
     file_path: String,
+    source: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ThermalAsset, String> {
     let path = PathBuf::from(&file_path);
@@ -282,22 +308,24 @@ pub async fn thermal_import_asset(
         .and_then(|s| s.to_str())
         .unwrap_or("asset.jpg")
         .to_string();
-    import_asset_impl(&state, &name, bytes)
+    import_asset_impl(&state, &name, bytes, source.as_deref())
 }
 
 #[tauri::command]
 pub async fn thermal_import_asset_bytes(
     file_name: String,
     file_bytes: Vec<u8>,
+    source: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ThermalAsset, String> {
-    import_asset_impl(&state, &file_name, file_bytes)
+    import_asset_impl(&state, &file_name, file_bytes, source.as_deref())
 }
 
 /// Raw-body import: the file content travels as the binary IPC body instead
 /// of a JSON number array, which matters for large files (GeoTIFF
 /// orthomosaics are routinely hundreds of MB). The file name arrives
-/// base64-encoded in the `file-name-b64` header (UTF-8 safe).
+/// base64-encoded in the `file-name-b64` header (UTF-8 safe); an optional
+/// `asset-source` header forces the library (see `import_asset_impl`).
 #[tauri::command]
 pub async fn thermal_import_asset_raw(
     request: tauri::ipc::Request<'_>,
@@ -314,7 +342,12 @@ pub async fn thermal_import_asset_raw(
         .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok())
         .and_then(|raw| String::from_utf8(raw).ok())
         .ok_or_else(|| "Missing or invalid file-name-b64 header".to_string())?;
-    import_asset_impl(&state, &file_name, bytes.clone())
+    let source = request
+        .headers()
+        .get("asset-source")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    import_asset_impl(&state, &file_name, bytes.clone(), source.as_deref())
 }
 
 #[tauri::command]

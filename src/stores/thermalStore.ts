@@ -19,8 +19,9 @@ import type {
   ThermalNetworkModel,
   ThermalSdkStatus,
 } from '@/types/thermal';
-import { EMPTY_NETWORK, hasDisplayableImage, valueSuffixFor } from '@/types/thermal';
+import { EMPTY_NETWORK, assetMimeType, hasDisplayableImage, valueSuffixFor } from '@/types/thermal';
 import * as thermalApi from '@/lib/thermalApi';
+import { makeDebouncedPersister } from '@/lib/debouncedPersister';
 
 interface ThermalState {
   sdkStatus: ThermalSdkStatus | null;
@@ -83,47 +84,14 @@ interface ThermalState {
   clearNetworkResult: () => void;
 }
 
-/**
- * Debounced, strictly-ordered persister: coalesces rapid edits (per-keystroke)
- * into one write and chains writes so a slow earlier request can never land
- * after (and clobber) a newer one.
- */
-function makeDebouncedPersister(
-  write: (assetId: number, json: string) => Promise<void>,
-  label: string,
-  delayMs = 400,
-) {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let chain: Promise<void> = Promise.resolve();
-  let pending: { assetId: number; json: string } | null = null;
-  const flush = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    if (!pending) return;
-    const p = pending;
-    pending = null;
-    chain = chain
-      .then(() => write(p.assetId, p.json))
-      .catch((e) => console.error(`Failed to persist ${label}:`, e));
-  };
-  return {
-    schedule(assetId: number, json: string) {
-      pending = { assetId, json };
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(flush, delayMs);
-    },
-    flush,
-  };
-}
+type AssetJson = { assetId: number; json: string };
 
-const annotationsPersister = makeDebouncedPersister(
-  (assetId, json) => thermalApi.setThermalAnnotations(assetId, json),
+const annotationsPersister = makeDebouncedPersister<AssetJson>(
+  ({ assetId, json }) => thermalApi.setThermalAnnotations(assetId, json),
   'annotations',
 );
-const networkPersister = makeDebouncedPersister(
-  (assetId, json) => thermalApi.setThermalNetwork(assetId, json),
+const networkPersister = makeDebouncedPersister<AssetJson>(
+  ({ assetId, json }) => thermalApi.setThermalNetwork(assetId, json),
   'thermal network',
 );
 
@@ -137,17 +105,6 @@ function replaceObjectUrl(bytes: ArrayBuffer | null, mime: string): string | nul
   if (!bytes) return null;
   currentObjectUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
   return currentObjectUrl;
-}
-
-function mimeFor(asset: ThermalAsset): string {
-  const ext = asset.fileName.toLowerCase().split('.').pop() ?? '';
-  if (asset.assetType === 'video') {
-    if (ext === 'mov') return 'video/quicktime';
-    if (ext === 'avi') return 'video/x-msvideo';
-    return 'video/mp4';
-  }
-  if (ext === 'png') return 'image/png';
-  return 'image/jpeg';
 }
 
 export const useThermalStore = create<ThermalState>((set, get) => ({
@@ -291,7 +248,7 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
         const mime =
           asset.source === 'metashape' && asset.assetType === 'image'
             ? 'image/png'
-            : mimeFor(asset);
+            : assetMimeType(asset);
         const assetUrl = replaceObjectUrl(fileBytes, mime);
         set({ assetUrl });
       }
@@ -444,7 +401,7 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
     set({ annotations });
     const assetId = get().selectedAssetId;
     if (persist && assetId != null) {
-      annotationsPersister.schedule(assetId, JSON.stringify(annotations));
+      annotationsPersister.schedule({ assetId, json: JSON.stringify(annotations) });
     }
   },
 
@@ -455,7 +412,7 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
     set({ network, networkResult: null });
     const assetId = get().selectedAssetId;
     if (persist && assetId != null) {
-      networkPersister.schedule(assetId, JSON.stringify(network));
+      networkPersister.schedule({ assetId, json: JSON.stringify(network) });
     }
   },
 

@@ -17,8 +17,9 @@ export interface ThermalAsset {
   cameraModel: string | null;
   importedAt: string | null;
   notes: string | null;
-  /** 'thermal' (drone media) or 'metashape' (photogrammetry export). */
-  source: 'thermal' | 'metashape';
+  /** 'thermal' (drone media), 'metashape' (Metashape export) or
+   *  'photogrammetry' (visual photos/videos for the photogrammetry report). */
+  source: 'thermal' | 'metashape' | 'photogrammetry';
   /** Parsed metadata JSON (Metashape kind, preview file, CRS, camera count…). */
   metaJson: string | null;
 }
@@ -91,6 +92,18 @@ export function hasDisplayableImage(asset: ThermalAsset): boolean {
     return !!meta.previewFile;
   }
   return true;
+}
+
+/** MIME type for serving an asset's original file through a Blob URL. */
+export function assetMimeType(asset: ThermalAsset): string {
+  const ext = asset.fileName.toLowerCase().split('.').pop() ?? '';
+  if (asset.assetType === 'video') {
+    if (ext === 'mov') return 'video/quicktime';
+    if (ext === 'avi') return 'video/x-msvideo';
+    return 'video/mp4';
+  }
+  if (ext === 'png') return 'image/png';
+  return 'image/jpeg';
 }
 
 /** Unit suffix for measured values on this asset ('' for unitless indices). */
@@ -368,6 +381,16 @@ export interface ReportAnomalyEntry {
   recommendation: string;
 }
 
+/** One figure of the Photogrammetry Imagery section. The array order is the
+ *  order in the exported report. */
+export interface PhotogrammetryEntry {
+  id: string;
+  assetId: number;
+  caption: string;
+  /** Videos: timestamp (seconds) of the frame rendered in the report. */
+  frameTimeS?: number;
+}
+
 /** Snapshot of a linked DJI flight, embedded in the report so it renders
  *  even when the report/bundle is opened where the flight DB entry is absent. */
 export interface FlightSnapshot {
@@ -402,6 +425,8 @@ export interface ThermalReport {
   linkedFlights: FlightSnapshot[];
   /** Imported Metashape orthomosaic asset embedded in the report. */
   orthoAssetId: number | null;
+  /** Ordered photogrammetry figures (images/video frames with annotations). */
+  photogrammetry: PhotogrammetryEntry[];
 }
 
 export const EMPTY_REPORT: ThermalReport = {
@@ -417,6 +442,7 @@ export const EMPTY_REPORT: ThermalReport = {
   orthomosaicLink: '',
   linkedFlights: [],
   orthoAssetId: null,
+  photogrammetry: [],
 };
 
 /** Defect classification keys → human-readable labels. */

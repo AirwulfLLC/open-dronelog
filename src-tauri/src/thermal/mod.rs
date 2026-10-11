@@ -59,7 +59,8 @@ pub struct ThermalAsset {
     pub camera_model: Option<String>,
     pub imported_at: Option<String>,
     pub notes: Option<String>,
-    /// "thermal" (drone thermal/visual media) or "metashape" (photogrammetry export).
+    /// "thermal" (drone thermal/visual media), "metashape" (Metashape export)
+    /// or "photogrammetry" (visual photos/videos for the photogrammetry report).
     #[serde(default = "default_asset_source")]
     pub source: String,
     /// Parsed metadata JSON (Metashape kind, preview file, CRS, camera count…).

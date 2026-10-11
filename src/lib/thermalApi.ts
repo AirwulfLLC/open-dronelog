@@ -46,22 +46,30 @@ export async function getThermalSdkStatus(): Promise<ThermalSdkStatus> {
   return inv<ThermalSdkStatus>('thermal_sdk_status');
 }
 
-export async function importThermalAsset(filePath: string): Promise<ThermalAsset> {
-  return inv<ThermalAsset>('thermal_import_asset', { filePath });
+/** Library an import is filed under. Omitted = auto (thermal media / Metashape
+ *  exports); 'photogrammetry' = visual photos/videos for the photogrammetry tab. */
+export type AssetSourceOverride = 'photogrammetry';
+
+export async function importThermalAsset(
+  filePath: string,
+  source?: AssetSourceOverride,
+): Promise<ThermalAsset> {
+  return inv<ThermalAsset>('thermal_import_asset', { filePath, source: source ?? null });
 }
 
 export async function importThermalAssetBytes(
   fileName: string,
   fileBytes: Uint8Array,
+  source?: AssetSourceOverride,
 ): Promise<ThermalAsset> {
   if (isWeb) throw new Error(WEB_UNSUPPORTED);
   // Raw binary IPC body — a JSON number array would freeze the app for
   // large files (GeoTIFF orthomosaics are routinely hundreds of MB).
   const { invoke } = await import('@tauri-apps/api/core');
   const nameB64 = btoa(String.fromCharCode(...new TextEncoder().encode(fileName)));
-  return invoke<ThermalAsset>('thermal_import_asset_raw', fileBytes, {
-    headers: { 'file-name-b64': nameB64 },
-  });
+  const headers: Record<string, string> = { 'file-name-b64': nameB64 };
+  if (source) headers['asset-source'] = source;
+  return invoke<ThermalAsset>('thermal_import_asset_raw', fileBytes, { headers });
 }
 
 export async function listThermalAssets(): Promise<ThermalAsset[]> {

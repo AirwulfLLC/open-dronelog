@@ -5,7 +5,7 @@
  * · analysis panel (right) · report submenu (top-right).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useThermalStore } from '@/stores/thermalStore';
 import { isThermalSupported } from '@/lib/thermalApi';
@@ -59,6 +59,12 @@ export function ThermalStudio() {
   const reportMenuRef = useRef<HTMLDivElement>(null);
 
   const selectedAsset = assets.find((a) => a.id === selectedAssetId) ?? null;
+  // The asset list is shared with the Photogrammetry tab; its visual media
+  // has its own library and stays out of the thermal one.
+  const libraryAssets = useMemo(
+    () => assets.filter((a) => a.source !== 'photogrammetry'),
+    [assets],
+  );
 
   useEffect(() => {
     if (!isThermalSupported()) return;
@@ -89,10 +95,11 @@ export function ThermalStudio() {
       'tif', 'tiff', 'pdf', 'xml', 'las', 'laz', 'ply', 'obj', 'kml', 'kmz',
     ]);
     let unlisten: (() => void) | null = null;
+    let cancelled = false;
     (async () => {
       try {
         const { getCurrentWebview } = await import('@tauri-apps/api/webview');
-        unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+        const stop = await getCurrentWebview().onDragDropEvent((event) => {
           if (event.payload.type === 'over') {
             setTauriDragActive(true);
           } else if (event.payload.type === 'drop') {
@@ -108,11 +115,20 @@ export function ThermalStudio() {
             setTauriDragActive(false);
           }
         });
+        // Unmounted while the registration was in flight (StrictMode re-runs
+        // effects in dev) — a leaked listener would import drops meant for
+        // the Photogrammetry tab into the thermal library.
+        if (cancelled) {
+          stop();
+          return;
+        }
+        unlisten = stop;
       } catch (e) {
         console.warn('Tauri drag-drop listener not available:', e);
       }
     })();
     return () => {
+      cancelled = true;
       if (unlisten) unlisten();
     };
   }, []);
@@ -293,16 +309,16 @@ export function ThermalStudio() {
         {/* Asset library */}
         <aside className="w-56 flex-shrink-0 border-r border-gray-700 flex flex-col min-h-0 bg-drone-secondary/40">
           <div className="px-3 py-2 border-b border-gray-700 text-xs font-semibold text-gray-300">
-            Assets ({assets.length})
+            Assets ({libraryAssets.length})
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
-            {assets.length === 0 && (
+            {libraryAssets.length === 0 && (
               <div className="p-3 text-[11px] text-gray-500">
                 No thermal assets yet. Import DJI radiometric JPEGs (R-JPEG) or
                 visual photos/videos to get started.
               </div>
             )}
-            {assets.map((a) => (
+            {libraryAssets.map((a) => (
               <AssetRow
                 key={a.id}
                 asset={a}
