@@ -1,5 +1,5 @@
 {
-  "sourceFingerprint": "de8e548ec9688eb24c6155798f0258dd9c2a02fe2541c361b3b4bfb1c8c20a80",
+  "sourceFingerprint": "0612d09750ab37c334fdefddb5ebc4930852c44693365f13a605ff73ffc71e9d",
   "sourceFile": "src-tauri/src/database.rs",
   "tables": [
     {
@@ -375,6 +375,134 @@
         },
         {
           "name": "created_at",
+          "type": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"
+        }
+      ]
+    },
+    {
+      "name": "thermal_assets",
+      "columns": [
+        {
+          "name": "id",
+          "type": "BIGINT PRIMARY KEY"
+        },
+        {
+          "name": "file_name",
+          "type": "VARCHAR NOT NULL"
+        },
+        {
+          "name": "stored_path",
+          "type": "VARCHAR NOT NULL"
+        },
+        {
+          "name": "file_hash",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "asset_type",
+          "type": "VARCHAR NOT NULL DEFAULT 'image'"
+        },
+        {
+          "name": "is_radiometric",
+          "type": "BOOLEAN DEFAULT FALSE"
+        },
+        {
+          "name": "width",
+          "type": "INTEGER DEFAULT 0"
+        },
+        {
+          "name": "height",
+          "type": "INTEGER DEFAULT 0"
+        },
+        {
+          "name": "gps_lat",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "gps_lon",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "captured_at",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "camera_model",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "imported_at",
+          "type": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "notes",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "source",
+          "type": "VARCHAR DEFAULT 'thermal'"
+        },
+        {
+          "name": "meta_json",
+          "type": "VARCHAR"
+        }
+      ]
+    },
+    {
+      "name": "thermal_annotations",
+      "columns": [
+        {
+          "name": "asset_id",
+          "type": "BIGINT PRIMARY KEY"
+        },
+        {
+          "name": "annotations",
+          "type": "VARCHAR NOT NULL"
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"
+        }
+      ]
+    },
+    {
+      "name": "thermal_networks",
+      "columns": [
+        {
+          "name": "asset_id",
+          "type": "BIGINT PRIMARY KEY"
+        },
+        {
+          "name": "network",
+          "type": "VARCHAR NOT NULL"
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"
+        }
+      ]
+    },
+    {
+      "name": "thermal_reports",
+      "columns": [
+        {
+          "name": "id",
+          "type": "BIGINT PRIMARY KEY"
+        },
+        {
+          "name": "name",
+          "type": "VARCHAR NOT NULL"
+        },
+        {
+          "name": "report_json",
+          "type": "VARCHAR NOT NULL"
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
           "type": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"
         }
       ]

@@ -240,6 +240,7 @@
     "flightLocations": "飞行位置",
     "globalFilterActive": "— 全局筛选器已启用",
     "batteryHealth": "电池健康",
+    "downloadSummary": "下载摘要",
     "top3Longest": "Top 3 最长飞行",
     "top3Furthest": "Top 3 最远飞行",
     "noFlightsAvailable": "没有可用的飞行记录。",

@@ -5,7 +5,7 @@
 
 import type { FlightDataResponse, TelemetryData } from '@/types';
 import type { UnitPreferences } from './utils';
-import { speedMultiplierFromMs } from './utils';
+import { normalizeSerial, speedMultiplierFromMs } from './utils';
 
 declare const __APP_VERSION__: string;
 
@@ -18,6 +18,188 @@ export function escapeCsv(value: string): string {
     return `"${value}"`;
   }
   return value;
+}
+
+export interface BatteryFlightSummary {
+  flightId: number;
+  batterySerial: string;
+  cycleCount: number | null;
+  durationSecs: number;
+  startTime: string | null;
+  maxTemperatureC: number | null;
+  maxFullCapacityMah: number | null;
+}
+
+const BATTERY_SUMMARY_HEADERS = [
+  'battery_id',
+  'battery_name',
+  'battery_cycles',
+  'battery_flights',
+  'used_duration',
+  'first_used',
+  'last_used',
+  'days_since_first_use',
+  'days_since_last_use',
+  'max_temp',
+  'highest_full_capacity',
+  'latest_full_capacity',
+];
+
+function maxFinite(values: Array<number | null> | undefined, positiveOnly = false): number | null {
+  let maximum: number | null = null;
+  for (const value of values ?? []) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || (positiveOnly && value <= 0)) continue;
+    maximum = maximum === null ? value : Math.max(maximum, value);
+  }
+  return maximum;
+}
+
+/** Reduce a full flight response to the values needed by the battery summary export. */
+export function summarizeBatteryFlight(data: FlightDataResponse): BatteryFlightSummary | null {
+  const batterySerial = normalizeSerial(data.flight.batterySerial);
+  if (!batterySerial) return null;
+
+  return {
+    flightId: data.flight.id,
+    batterySerial,
+    cycleCount: data.flight.cycleCount,
+    durationSecs: data.flight.durationSecs ?? 0,
+    startTime: data.flight.startTime,
+    maxTemperatureC: maxFinite(data.telemetry.batteryTemp),
+    maxFullCapacityMah: maxFinite(data.telemetry.batteryFullCapacity, true),
+  };
+}
+
+function localDateParts(date: Date): { key: string; dayNumber: number } {
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return {
+    key: `${year}-${pad(month)}-${pad(day)}`,
+    dayNumber: Date.UTC(year, month - 1, day) / 86_400_000,
+  };
+}
+
+function formatExportDuration(seconds: number): string {
+  const wholeSeconds = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(wholeSeconds / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  const remainingSeconds = wholeSeconds % 60;
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${pad(hours)}h-${pad(minutes)}m-${pad(remainingSeconds)}s`;
+}
+
+function formatCsvNumber(value: number | null, maximumFractionDigits: number): string {
+  if (value === null) return '';
+  return Number(value.toFixed(maximumFractionDigits)).toString();
+}
+
+/** Build the one-row-per-battery summary CSV from reduced, full-resolution flight data. */
+export function buildBatterySummaryCsv(
+  flights: BatteryFlightSummary[],
+  batteryNameMap: Record<string, string>,
+  now = new Date(),
+): string {
+  interface Aggregate {
+    serial: string;
+    cycles: number | null;
+    flights: number;
+    durationSecs: number;
+    firstUsed: Date | null;
+    lastUsed: Date | null;
+    latestFlightId: number;
+    maxTemperatureC: number | null;
+    highestFullCapacityMah: number | null;
+    latestFullCapacityMah: number | null;
+  }
+
+  const aggregates = new Map<string, Aggregate>();
+  for (const flight of flights) {
+    const existing = aggregates.get(flight.batterySerial) ?? {
+      serial: flight.batterySerial,
+      cycles: null,
+      flights: 0,
+      durationSecs: 0,
+      firstUsed: null,
+      lastUsed: null,
+      latestFlightId: -Infinity,
+      maxTemperatureC: null,
+      highestFullCapacityMah: null,
+      latestFullCapacityMah: null,
+    };
+
+    existing.flights += 1;
+    existing.durationSecs += flight.durationSecs;
+    if (flight.cycleCount !== null) {
+      existing.cycles = existing.cycles === null
+        ? flight.cycleCount
+        : Math.max(existing.cycles, flight.cycleCount);
+    }
+    if (flight.maxTemperatureC !== null) {
+      existing.maxTemperatureC = existing.maxTemperatureC === null
+        ? flight.maxTemperatureC
+        : Math.max(existing.maxTemperatureC, flight.maxTemperatureC);
+    }
+    if (flight.maxFullCapacityMah !== null) {
+      existing.highestFullCapacityMah = existing.highestFullCapacityMah === null
+        ? flight.maxFullCapacityMah
+        : Math.max(existing.highestFullCapacityMah, flight.maxFullCapacityMah);
+    }
+
+    const usedAt = flight.startTime ? new Date(flight.startTime) : null;
+    if (usedAt && Number.isFinite(usedAt.getTime())) {
+      if (!existing.firstUsed || usedAt < existing.firstUsed) existing.firstUsed = usedAt;
+      if (
+        !existing.lastUsed
+        || usedAt > existing.lastUsed
+        || (usedAt.getTime() === existing.lastUsed.getTime() && flight.flightId > existing.latestFlightId)
+      ) {
+        existing.lastUsed = usedAt;
+        existing.latestFlightId = flight.flightId;
+        existing.latestFullCapacityMah = flight.maxFullCapacityMah;
+      }
+    } else if (!existing.lastUsed && flight.flightId > existing.latestFlightId) {
+      // Keep deterministic behavior for manually entered flights without a date.
+      existing.latestFlightId = flight.flightId;
+      existing.latestFullCapacityMah = flight.maxFullCapacityMah;
+    }
+
+    aggregates.set(flight.batterySerial, existing);
+  }
+
+  const today = localDateParts(now);
+  const rows = [...aggregates.values()]
+    .sort((a, b) => a.serial.localeCompare(b.serial))
+    .map((battery) => {
+      const firstUsed = battery.firstUsed ? localDateParts(battery.firstUsed) : null;
+      const lastUsed = battery.lastUsed ? localDateParts(battery.lastUsed) : null;
+      const customName = batteryNameMap[battery.serial]?.trim() ?? '';
+      const values = [
+        battery.serial,
+        customName,
+        battery.cycles?.toString() ?? '',
+        battery.flights.toString(),
+        formatExportDuration(battery.durationSecs),
+        firstUsed?.key ?? '',
+        lastUsed?.key ?? '',
+        firstUsed ? Math.max(0, today.dayNumber - firstUsed.dayNumber).toString() : '',
+        lastUsed ? Math.max(0, today.dayNumber - lastUsed.dayNumber).toString() : '',
+        battery.maxTemperatureC === null
+          ? ''
+          : `${formatCsvNumber(battery.maxTemperatureC, 1)}C`,
+        formatCsvNumber(battery.highestFullCapacityMah, 0),
+        formatCsvNumber(battery.latestFullCapacityMah, 0),
+      ];
+      return values.map((value) => escapeCsv(value)).join(',');
+    });
+
+  return [BATTERY_SUMMARY_HEADERS.join(','), ...rows].join('\n');
+}
+
+export function getBatterySummaryFilename(now = new Date()): string {
+  const { key } = localDateParts(now);
+  return `battery_summary_${key.replace(/-/g, '_')}.csv`;
 }
 
 /**

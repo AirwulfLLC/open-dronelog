@@ -5,12 +5,25 @@
  */
 
 import { useMemo, useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import ReactECharts from 'echarts-for-react';
 import { type DateRange } from 'react-day-picker';
 import 'react-day-picker/dist/style.css';
 import type { Flight, OverviewStats } from '@/types';
-import { getBatteryFullCapacityHistory } from '@/lib/api';
+import {
+  downloadFile,
+  getBatteryFullCapacityHistory,
+  getFlightData,
+  isWebMode,
+  saveTextWithDialog,
+} from '@/lib/api';
+import {
+  buildBatterySummaryCsv,
+  getBatterySummaryFilename,
+  summarizeBatteryFlight,
+} from '@/lib/exportUtils';
+import type { BatteryFlightSummary } from '@/lib/exportUtils';
 import {
   getBatteryGroupKey,
   getBatteryGroupMembers,
@@ -449,6 +462,7 @@ export function Overview({ stats, flights, unitPrefs, onSelectFlight }: Overview
             filteredFlights={filteredFlights}
             isLight={resolvedTheme === 'light'}
             getBatteryDisplayName={getBatteryDisplayName}
+            batteryNameMap={batteryNameMap}
             renameBattery={renameBattery}
             hideSerialNumbers={hideSerialNumbers}
           />
@@ -1677,6 +1691,7 @@ function BatteryHealthList({
   filteredFlights,
   isLight,
   getBatteryDisplayName,
+  batteryNameMap,
   renameBattery,
   hideSerialNumbers,
 }: {
@@ -1684,6 +1699,7 @@ function BatteryHealthList({
   filteredFlights: Flight[];
   isLight: boolean;
   getBatteryDisplayName: (serial: string) => string;
+  batteryNameMap: Record<string, string>;
   renameBattery: (serial: string, displayName: string) => void;
   hideSerialNumbers: boolean;
 }) {
@@ -1693,6 +1709,8 @@ function BatteryHealthList({
   const [draftName, setDraftName] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>('progress');
+  const [isExportingSummary, setIsExportingSummary] = useState(false);
+  const [exportProgress, setExportProgress] = useState({ done: 0, total: 0, currentFile: '' });
 
   // Battery selection for capacity chart
   const [selectedCapBatteries, setSelectedCapBatteries] = useState<string[]>([]);
@@ -1921,6 +1939,45 @@ function BatteryHealthList({
     setRenameError(null);
   };
 
+  const handleDownloadSummary = async () => {
+    if (isExportingSummary || filteredFlights.length === 0) return;
+
+    const batteryFlights = filteredFlights.filter((flight) => normalizeSerial(flight.batterySerial));
+    setIsExportingSummary(true);
+    setExportProgress({ done: 0, total: batteryFlights.length, currentFile: '' });
+    try {
+      const flightSummaries: BatteryFlightSummary[] = [];
+      for (let index = 0; index < batteryFlights.length; index += 1) {
+        const flight = batteryFlights[index];
+        setExportProgress({
+          done: index,
+          total: batteryFlights.length,
+          currentFile: flight.displayName || flight.fileName || `#${flight.id}`,
+        });
+        try {
+          const data = await getFlightData(flight.id, 999999999);
+          const summary = summarizeBatteryFlight(data);
+          if (summary) flightSummaries.push(summary);
+        } catch (error) {
+          console.error(`Failed to process flight ${flight.id} for battery summary:`, error);
+        }
+      }
+
+      setExportProgress({ done: batteryFlights.length, total: batteryFlights.length, currentFile: '' });
+      const csv = buildBatterySummaryCsv(flightSummaries, batteryNameMap);
+      const filename = getBatterySummaryFilename();
+      if (isWebMode()) {
+        downloadFile(filename, csv, 'text/csv;charset=utf-8');
+      } else {
+        await saveTextWithDialog(filename, csv, [{ name: 'CSV', extensions: ['csv'] }]);
+      }
+    } catch (error) {
+      console.error('Battery summary export failed:', error);
+    } finally {
+      setIsExportingSummary(false);
+    }
+  };
+
   const allCapY = capacitySeries.flatMap((s) => s.data.map((p: [number, number]) => p[1]));
   let capYMax = 5000;
   for (let i = 0; i < allCapY.length; i++) {
@@ -2046,16 +2103,26 @@ function BatteryHealthList({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between mb-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-0">
         <h3 className="text-sm font-semibold text-white">{t('overview.batteryHealth')}</h3>
-        <select
-          value={sortMode}
-          onChange={(e) => setSortMode(e.target.value as SortMode)}
-          className="sort-select text-[10px] px-1.5 py-0.5 rounded border cursor-pointer outline-none"
-        >
-          <option value="progress">{t('overview.sortByProgress')}</option>
-          <option value="name">{t('overview.sortByName')}</option>
-        </select>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleDownloadSummary}
+            disabled={isExportingSummary}
+            className="text-[10px] px-2 py-1 rounded border border-drone-primary/60 text-drone-primary hover:bg-drone-primary/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {t('overview.downloadSummary')}
+          </button>
+          <select
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value as SortMode)}
+            className="sort-select text-[10px] px-1.5 py-0.5 rounded border cursor-pointer outline-none"
+          >
+            <option value="progress">{t('overview.sortByProgress')}</option>
+            <option value="name">{t('overview.sortByName')}</option>
+          </select>
+        </div>
       </div>
       <div className="space-y-2 max-h-[200px] overflow-y-auto" style={{ padding: '0 16px 0 10px' }}>
         {sortedBatteries.map((battery) => {
@@ -2258,6 +2325,36 @@ function BatteryHealthList({
         </div>
       ) : (
         <p className="text-xs text-gray-500">{t('overview.noCapacityData')}</p>
+      )}
+
+      {isExportingSummary && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-drone-surface border border-gray-700 rounded-xl p-6 min-w-[320px] shadow-2xl">
+            <h3 className="text-lg font-semibold mb-4">{t('flightList.exportingFlights')}</h3>
+            <div className="space-y-3">
+              <div className="flex justify-between text-sm text-gray-400">
+                <span>{t('flightList.progress')}</span>
+                <span>{exportProgress.done} / {exportProgress.total}</span>
+              </div>
+              <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+                <div
+                  className="h-full bg-drone-primary transition-all duration-300"
+                  style={{
+                    width: `${exportProgress.total > 0
+                      ? (exportProgress.done / exportProgress.total) * 100
+                      : 0}%`,
+                  }}
+                />
+              </div>
+              {exportProgress.currentFile && (
+                <div className="text-xs text-gray-500 truncate">
+                  {t('flightList.current')} {exportProgress.currentFile}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -3115,4 +3212,3 @@ function SpeedometerIcon() {
     </svg>
   );
 }
-

@@ -62,7 +62,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: windows-latest
+          - os: windows-2022
             target: x86_64-pc-windows-msvc
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -122,6 +122,8 @@ jobs:
       - name: Build Windows Tauri app (no release upload)
         if: runner.os == 'Windows'
         shell: bash
+        env:
+          CL: /std:c++17 /EHsc
         run: |
           set -euo pipefail
           # Start from a clean workspace so collected artifacts are from this run only.
@@ -202,7 +204,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Sign .exe with SignPath
+      - name: Submit .exe to SignPath and wait for approval
         if: runner.os == 'Windows' && needs.resolve-tag.outputs.sign_windows == 'true'
         id: sign-exe
         uses: signpath/github-action-submit-signing-request@v2
@@ -214,9 +216,10 @@ jobs:
           artifact-configuration-slug: '${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}'
           github-artifact-id: '${{ steps.upload-exe.outputs.artifact-id }}'
           wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 18000
           output-artifact-directory: 'signed/exe'
 
-      - name: Sign .msi with SignPath
+      - name: Submit .msi to SignPath and wait for approval
         if: runner.os == 'Windows' && needs.resolve-tag.outputs.sign_windows == 'true'
         id: sign-msi
         uses: signpath/github-action-submit-signing-request@v2
@@ -228,6 +231,7 @@ jobs:
           artifact-configuration-slug: '${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}'
           github-artifact-id: '${{ steps.upload-msi.outputs.artifact-id }}'
           wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 18000
           output-artifact-directory: 'signed/msi'
 
       - name: Prepare Windows release assets

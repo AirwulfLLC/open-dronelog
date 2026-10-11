@@ -240,6 +240,7 @@
     "flightLocations": "フライト位置",
     "globalFilterActive": "— グローバルフィルター有効",
     "batteryHealth": "バッテリー健康状態",
+    "downloadSummary": "概要をダウンロード",
     "top3Longest": "トップ3 最長フライト",
     "top3Furthest": "トップ3 最遠フライト",
     "noFlightsAvailable": "利用可能なフライトがありません。",

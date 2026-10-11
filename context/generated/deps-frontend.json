@@ -1,10 +1,10 @@
 {
-  "sourceFingerprint": "3d0e49d8530eeab31f2853b049b15e08ea7a3062c708a4ce0fc9805d3f066cac",
+  "sourceFingerprint": "92d5d97f8551c66c4e60e0d9cbb9b9e461994aed60115cf1e39cfce110f27a4e",
   "packageName": "open-dronelog",
-  "projectVersion": "3.3.0",
+  "projectVersion": "3.3.1",
   "dependencies": [
     "@deck.gl/layers",
-    "@deck.gl/mapbox",
+    "@deck.gl/maplibre",
     "@tauri-apps/api",
     "@tauri-apps/plugin-dialog",
     "@tauri-apps/plugin-fs",
@@ -16,6 +16,7 @@
     "html2canvas",
     "i18next",
     "js-sha256",
+    "jspdf",
     "maplibre-gl",
     "react",
     "react-day-picker",

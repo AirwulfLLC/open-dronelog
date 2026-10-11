@@ -240,6 +240,7 @@
     "flightLocations": "비행 위치",
     "globalFilterActive": "— 전역 필터 활성",
     "batteryHealth": "배터리 상태",
+    "downloadSummary": "요약 다운로드",
     "top3Longest": "Top 3 최장 비행",
     "top3Furthest": "Top 3 최원 비행",
     "noFlightsAvailable": "이용 가능한 비행이 없습니다.",
