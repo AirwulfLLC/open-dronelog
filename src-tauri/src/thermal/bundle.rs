@@ -246,10 +246,14 @@ fn remap_report_ids(report: &mut serde_json::Value, map: &std::collections::Hash
             }
         }
     }
-    if let Some(entries) = report.get_mut("photogrammetry").and_then(|v| v.as_array_mut()) {
-        for e in entries {
-            if let Some(v) = e.get_mut("assetId") {
-                remap(v);
+    // Photogrammetry figures: `figures` (current) or `photogrammetry` (the
+    // field name used while both workflows shared one report).
+    for key in ["figures", "photogrammetry"] {
+        if let Some(entries) = report.get_mut(key).and_then(|v| v.as_array_mut()) {
+            for e in entries {
+                if let Some(v) = e.get_mut("assetId") {
+                    remap(v);
+                }
             }
         }
     }
@@ -525,6 +529,7 @@ mod tests {
                 { "id": "p1", "assetId": 2, "caption": "" },
                 { "id": "p2", "assetId": 3, "caption": "", "frameTimeS": 4.5 }
             ],
+            "figures": [{ "id": "g1", "assetId": 1, "caption": "" }],
             "orthoAssetId": 4
         });
         let map: HashMap<i64, i64> = [(1, 10), (2, 20), (4, 40)].into_iter().collect();
@@ -536,6 +541,7 @@ mod tests {
         // An asset that was not in the bundle must become null, never a dangling id
         assert!(report["photogrammetry"][1]["assetId"].is_null());
         assert_eq!(report["photogrammetry"][1]["frameTimeS"], 4.5);
+        assert_eq!(report["figures"][0]["assetId"], 10);
         assert_eq!(report["orthoAssetId"], 40);
     }
 }

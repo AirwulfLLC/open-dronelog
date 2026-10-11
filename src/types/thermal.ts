@@ -206,12 +206,13 @@ export type AnnotationTool =
   | 'freehand'
   | 'circle'
   | 'rect'
+  | 'eraser'
   | 'node'
   | 'conductor';
 
 export interface AnnotationBase {
   id: string;
-  type: Exclude<AnnotationTool, 'select' | 'node' | 'conductor'>;
+  type: Exclude<AnnotationTool, 'select' | 'eraser' | 'node' | 'conductor'>;
   color: string;
   strokeWidth: number;
 }
@@ -345,9 +346,19 @@ export const EMPTY_NETWORK: ThermalNetworkModel = { nodes: [], conductors: [] };
 
 // ---------------- Reports ----------------
 
+/** Report workflows. Each has its own builder, sections and export layout;
+ *  saved reports carry their kind so the workflows list only their own. */
+export type ReportKind = 'thermal' | 'photogrammetry';
+
+export const REPORT_KIND_LABELS: Record<ReportKind, string> = {
+  thermal: 'Thermal Inspection Report',
+  photogrammetry: 'Photogrammetry Survey Report',
+};
+
 export interface ThermalReportMeta {
   id: number;
   name: string;
+  kind: ReportKind;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -408,41 +419,98 @@ export interface FlightSnapshot {
   photoCount: number | null;
 }
 
-export interface ThermalReport {
+/** Fields every report kind shares: header data, linked flights, orthomosaic. */
+export interface ReportBase {
   version: 1;
+  kind: ReportKind;
   // Header data
   propertyAddress: string;
   inspectionDate: string;
   weatherConditions: string;
   inspectorName: string;
-  // Sections
   summary: string;
-  imagingLog: ReportImageEntry[];
-  anomalies: ReportAnomalyEntry[];
-  actionPlan: string;
   orthomosaicLink: string;
-  /** DJI flights linked to this inspection (snapshots, not live references). */
+  /** DJI flights linked to this report (snapshots, not live references). */
   linkedFlights: FlightSnapshot[];
   /** Imported Metashape orthomosaic asset embedded in the report. */
   orthoAssetId: number | null;
-  /** Ordered photogrammetry figures (images/video frames with annotations). */
-  photogrammetry: PhotogrammetryEntry[];
 }
 
-export const EMPTY_REPORT: ThermalReport = {
+export interface ThermalReport extends ReportBase {
+  kind: 'thermal';
+  imagingLog: ReportImageEntry[];
+  anomalies: ReportAnomalyEntry[];
+  actionPlan: string;
+}
+
+/** A photogrammetry-survey observation, optionally tied to one of the figures. */
+export interface PhotogrammetryFinding {
+  id: string;
+  refId: string; // e.g. "F-01"
+  /** PhotogrammetryEntry.id of the figure that shows it. */
+  figureId: string | null;
+  location: string;
+  category: string;
+  severity: Severity;
+  observation: string;
+  recommendation: string;
+}
+
+export interface PhotogrammetryReport extends ReportBase {
+  kind: 'photogrammetry';
+  projectName: string;
+  /** Objective / scope of the survey. */
+  surveyPurpose: string;
+  /** Software, GSD, accuracy, control points… */
+  processingNotes: string;
+  /** Ordered figures (photos / video frames with annotations). */
+  figures: PhotogrammetryEntry[];
+  findings: PhotogrammetryFinding[];
+  conclusions: string;
+}
+
+export type InspectionReport = ThermalReport | PhotogrammetryReport;
+
+const EMPTY_REPORT_BASE: Omit<ReportBase, 'kind'> = {
   version: 1,
   propertyAddress: '',
   inspectionDate: '',
   weatherConditions: '',
   inspectorName: '',
   summary: '',
-  imagingLog: [],
-  anomalies: [],
-  actionPlan: '',
   orthomosaicLink: '',
   linkedFlights: [],
   orthoAssetId: null,
-  photogrammetry: [],
+};
+
+export const EMPTY_THERMAL_REPORT: ThermalReport = {
+  ...EMPTY_REPORT_BASE,
+  kind: 'thermal',
+  imagingLog: [],
+  anomalies: [],
+  actionPlan: '',
+};
+
+export const EMPTY_PHOTOGRAMMETRY_REPORT: PhotogrammetryReport = {
+  ...EMPTY_REPORT_BASE,
+  kind: 'photogrammetry',
+  projectName: '',
+  surveyPurpose: '',
+  processingNotes: '',
+  figures: [],
+  findings: [],
+  conclusions: '',
+};
+
+/** Photogrammetry finding categories → labels. */
+export const PHOTO_FINDING_CATEGORIES: Record<string, string> = {
+  structural_defect: 'Structural Defect',
+  surface_deterioration: 'Surface Deterioration',
+  vegetation_encroachment: 'Vegetation Encroachment',
+  erosion_drainage: 'Erosion / Drainage',
+  obstruction: 'Encroachment / Obstruction',
+  survey_note: 'Survey / Accuracy Note',
+  other: 'Other',
 };
 
 /** Defect classification keys → human-readable labels. */

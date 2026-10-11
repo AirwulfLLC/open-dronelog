@@ -4,7 +4,7 @@
  * image pixels of the annotated surface.
  */
 
-import type { Annotation } from '@/types/thermal';
+import type { Annotation, FreehandAnnotation } from '@/types/thermal';
 
 let annotationCounter = 0;
 export function nextAnnotationId(): string {
@@ -169,6 +169,92 @@ function distToSegment(
   let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/** Eraser radius in image pixels for a surface `w` pixels wide. */
+export function eraserRadiusFor(w: number): number {
+  return Math.max(8, w / 60);
+}
+
+/**
+ * Apply the eraser at `pt`: shapes and labels it touches are removed whole,
+ * freehand strokes lose only the touched part and split into the remaining
+ * pieces. Returns the input array itself when nothing was touched, so callers
+ * can skip re-rendering and persisting.
+ */
+export function eraseAt(
+  annotations: Annotation[],
+  pt: { x: number; y: number },
+  radius: number,
+): Annotation[] {
+  let changed = false;
+  const out: Annotation[] = [];
+  for (const a of annotations) {
+    if (a.type !== 'freehand') {
+      if (hitTest(a, pt, radius)) {
+        changed = true;
+      } else {
+        out.push(a);
+      }
+      continue;
+    }
+    const pieces = eraseFromStroke(a, pt, radius);
+    if (pieces === null) {
+      out.push(a);
+    } else {
+      changed = true;
+      out.push(...pieces);
+    }
+  }
+  return changed ? out : annotations;
+}
+
+/** Cut a freehand stroke around the eraser; null when it was not touched. */
+function eraseFromStroke(
+  a: FreehandAnnotation,
+  pt: { x: number; y: number },
+  radius: number,
+): FreehandAnnotation[] | null {
+  const n = Math.floor(a.points.length / 2);
+  const vertex = (i: number) => ({ x: a.points[2 * i], y: a.points[2 * i + 1] });
+  // A vertex inside the eraser goes; a segment that merely passes through it
+  // is cut between its (kept) endpoints.
+  const erasedVertex: boolean[] = [];
+  let touched = false;
+  for (let i = 0; i < n; i++) {
+    const v = vertex(i);
+    erasedVertex[i] = Math.hypot(v.x - pt.x, v.y - pt.y) < radius;
+    if (erasedVertex[i]) touched = true;
+  }
+  const cutAfter: boolean[] = [];
+  for (let i = 0; i + 1 < n; i++) {
+    cutAfter[i] =
+      !erasedVertex[i] &&
+      !erasedVertex[i + 1] &&
+      distToSegment(pt, vertex(i), vertex(i + 1)) < radius;
+    if (cutAfter[i]) touched = true;
+  }
+  if (!touched) return null;
+
+  const pieces: FreehandAnnotation[] = [];
+  let run: number[] = [];
+  const flush = () => {
+    // A lone point is not a stroke
+    if (run.length >= 4) {
+      pieces.push({ ...a, id: pieces.length === 0 ? a.id : nextAnnotationId(), points: run });
+    }
+    run = [];
+  };
+  for (let i = 0; i < n; i++) {
+    if (erasedVertex[i]) {
+      flush();
+      continue;
+    }
+    run.push(a.points[2 * i], a.points[2 * i + 1]);
+    if (cutAfter[i]) flush();
+  }
+  flush();
+  return pieces;
 }
 
 /** True for a click-without-drag shape that should be discarded. */

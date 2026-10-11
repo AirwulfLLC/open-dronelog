@@ -1,5 +1,5 @@
 {
-  "sourceFingerprint": "65f455945605c91e320a6f4f4bc102e23c0819a1b0c2c90626e77a82227f28da",
+  "sourceFingerprint": "d24ffb5db8026d93e1dde08d1231baa95fecb8402426ffe603a3a8618d5bdb7d",
   "sourceFile": "src-tauri/src/database.rs",
   "tables": [
     {
@@ -496,6 +496,10 @@
         {
           "name": "report_json",
           "type": "VARCHAR NOT NULL"
+        },
+        {
+          "name": "kind",
+          "type": "VARCHAR DEFAULT 'thermal'"
         },
         {
           "name": "created_at",

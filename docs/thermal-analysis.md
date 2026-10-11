@@ -143,8 +143,12 @@ representing heat flow paths between computation points:
 
 ### Annotations
 
-Arrow, text, freehand, ellipse and rectangle tools with color selection,
-select/move, undo, clear, and Delete-key removal. Annotations persist per
+Arrow, text, freehand, ellipse and rectangle tools, an **eraser** (drag over
+annotations: shapes and labels are removed whole, freehand strokes are cut
+where the eraser passes and split into the remaining pieces), select/move,
+undo, clear, and Delete-key removal. Colors come from preset swatches or a
+**custom color** picker (the rainbow swatch opens the system color dialog;
+recent custom colors are kept as extra swatches). Annotations persist per
 asset in the profile database and are baked into report exports.
 
 ### Photogrammetry tab (report imagery)
@@ -221,31 +225,54 @@ Import inspection bundle…** restores one on any machine or profile — assets
 are deduplicated by content hash and the report is recreated with its
 references intact.
 
-### Inspection reports (Report ▸ Open report builder…)
+### Reports (Report ▸ Open report builder…)
 
-Report sections follow a standard building-envelope inspection structure:
+There are two report workflows, one per studio. Each has its own builder,
+section list and export layout, and each lists only its own saved reports
+(saved documents carry a `kind`). Both share the modal shell, the PDF/RTF
+writers and the sections they have in common (header data, linked DJI
+flights, embedded orthomosaic, imagery figures), so a new section can be
+added to either report independently: a field on the report type, a section
+component (`src/components/reports/sections/`), and its renderer in that
+kind's module under `src/lib/reports/`.
+
+**Thermal Inspection Report** (Thermal Studio) — building-envelope structure:
 
 1. **Header Data** — property address, inspection date, weather conditions,
-   inspector name.
-2. **Summary** — scope and methodology.
-3. **Thermal Imaging Log / Comparative Matrix** — side-by-side Visual
+   inspector name, summary.
+2. **Flight Data (DJI)** — linked flights (operations snapshot embedded).
+3. **Orthomosaic (Agisoft Metashape)** — embedded orthomosaic + map link.
+4. **Thermal Imaging Log / Comparative Matrix** — side-by-side Visual
    (Zoom/Wide) and Thermal (Infrared) images with captions and LRF
    (laser rangefinder) data per pair. The currently selected asset exports
    with its palette rendering and annotations.
-4. **Photogrammetry Imagery** — the Photogrammetry tab's queued figures, in
-   queue order, each with its annotations, caption and provenance line (file,
-   capture time, camera, position; video frame time).
-5. **Thermal Anomaly Log** — unique IDs, location + geotag
-   (latitude/longitude), T_max/T_min, reference baseline, ΔT, severity grade
-   and defect classification. Detected anomalies can be imported
-   automatically.
+5. **Anomalies & Findings** — unique IDs, location + geotag, T_max/T_min,
+   reference baseline, ΔT, severity grade and defect classification.
+   Detected anomalies can be imported automatically.
 6. **Action Plan & Repair Prioritization** — free-form plan plus an automatic
    priority summary derived from severity grades.
-7. **Orthomosaic Map Link** — link to a stitched thermal map (e.g. DJI Terra).
+
+**Photogrammetry Survey Report** (Photogrammetry tab):
+
+1. **Header Data** — project name, site address, survey date, weather,
+   pilot/operator, summary.
+2. **Survey Scope** — objective, area of interest, accuracy, deliverables.
+3. **Flight Data (DJI)** — as above.
+4. **Photogrammetry Outputs (Agisoft Metashape)** — embedded orthomosaic +
+   link; every imported Metashape deliverable is listed automatically.
+5. **Processing Notes** — software, alignment, GSD, control points, CRS.
+6. **Survey Imagery** — the Photogrammetry tab's queued figures in queue
+   order, each with annotations, caption and provenance line (file, capture
+   time, camera, position; video frame time).
+7. **Findings & Observations** — numbered findings with category
+   (structural defect, surface deterioration, vegetation, erosion/drainage,
+   obstruction, survey note), severity, location, linked figure, observation
+   and recommendation.
+8. **Conclusions & Recommendations** — narrative plus the severity summary.
 
 Reports are saved per profile and export as **PDF** (A4, paginated, with
-embedded images and a severity table) or **RTF** (opens in Word/LibreOffice,
-images embedded).
+embedded images and tables) or **RTF** (opens in Word/LibreOffice, images
+embedded). **Export Bundle** works for both kinds.
 
 ## Testing with DJI sample data
 

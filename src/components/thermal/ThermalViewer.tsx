@@ -18,6 +18,8 @@ import { NetworkLayer, hitTestConductor, hitTestNode } from './NetworkLayer';
 import {
   AnnotationShape,
   drawAnnotationsToCanvas,
+  eraseAt,
+  eraserRadiusFor,
   hitTest,
   nextAnnotationId,
   translateAnnotation,
@@ -77,6 +79,11 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
   const [selectedAnnId, setSelectedAnnId] = useState<string | null>(null);
   const [textInput, setTextInput] = useState<{ x: number; y: number; value: string } | null>(null);
   const [imgNatural, setImgNatural] = useState<{ w: number; h: number } | null>(null);
+  /** Pointer position while the eraser tool is active (drives its cursor ring). */
+  const [eraserPt, setEraserPt] = useState<{ x: number; y: number } | null>(null);
+  // Mirrors dragRef for rendering: while a drag is live the whole overlay must
+  // take the pointer, even in the pass-through (video + Select) mode.
+  const [dragActive, setDragActive] = useState(false);
   const [conductorDraft, setConductorDraft] = useState<{
     fromId: string;
     x1: number;
@@ -85,7 +92,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     y2: number;
   } | null>(null);
   const dragRef = useRef<{
-    mode: 'draw' | 'move' | 'conductor' | 'moveNode';
+    mode: 'draw' | 'move' | 'conductor' | 'moveNode' | 'erase';
     startX: number;
     startY: number;
     annId?: string;
@@ -94,6 +101,8 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     nodeOrig?: { x: number; y: number };
     /** Set once a moveNode drag actually displaces the node. */
     moved?: boolean;
+    /** Set once an erase drag actually removed something. */
+    erased?: boolean;
   } | null>(null);
 
   const isRadiometric = asset.isRadiometric && matrix != null;
@@ -103,6 +112,9 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
   // drive the overlay/export geometry of the new asset.
   useEffect(() => {
     setImgNatural(null);
+    setEraserPt(null);
+    setDragActive(false);
+    dragRef.current = null;
   }, [asset.id]);
 
   // Selections are mutually exclusive; panel-originated network selections
@@ -245,9 +257,16 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
           },
           false,
         );
+      } else if (drag.mode === 'erase') {
+        const current = useThermalStore.getState().annotations;
+        const next = eraseAt(current, pt, eraserRadiusFor(dims.w));
+        if (next !== current) {
+          drag.erased = true;
+          setAnnotations(next, false); // persisted once on pointer up
+        }
       }
     },
-    [setAnnotations, setNetwork],
+    [setAnnotations, setNetwork, dims.w],
   );
 
   // ---- Cursor temperature readout ----
@@ -255,6 +274,8 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     (e: React.MouseEvent) => {
       const pt = eventToImage(e);
       if (!pt) return;
+
+      if (annotationTool === 'eraser') setEraserPt(pt);
 
       if (dragRef.current) {
         handleDragMove(pt);
@@ -267,7 +288,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
         setCursorInfo({ x: px, y: py, temp: matrix.temps[py * matrix.width + px] });
       }
     },
-    [eventToImage, isRadiometric, matrix, handleDragMove],
+    [eventToImage, isRadiometric, matrix, handleDragMove, annotationTool],
   );
 
   // ---- Annotation drawing ----
@@ -296,18 +317,54 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
           return;
       }
       dragRef.current = { mode: 'draw', startX: pt.x, startY: pt.y };
+      setDragActive(true);
       setDraft({ annotation });
     },
     [annotationTool, annotationColor, annotationStrokeWidth],
   );
 
+  const commitTextInput = useCallback(() => {
+    if (textInput && textInput.value.trim()) {
+      setAnnotations([
+        ...annotations,
+        {
+          id: nextAnnotationId(),
+          type: 'text',
+          color: annotationColor,
+          strokeWidth: annotationStrokeWidth,
+          x: textInput.x,
+          y: textInput.y,
+          text: textInput.value.trim(),
+          fontSize: Math.max(14, Math.round(dims.w / 36)),
+        },
+      ]);
+      setAnnotationTool('select');
+    }
+    setTextInput(null);
+  }, [annotations, annotationColor, annotationStrokeWidth, dims.w, setAnnotations, setAnnotationTool, textInput]);
+
   const handlePointerDown = useCallback(
     (e: React.MouseEvent) => {
+      // The default mousedown action moves focus to the (unfocusable) SVG,
+      // which would blur — and thereby dismiss — the text input created
+      // below in the same event. It also starts no text selection/drag.
+      e.preventDefault();
       const pt = eventToImage(e);
       if (!pt) return;
 
+      // A click anywhere while a label is being typed commits that label
+      if (textInput) {
+        commitTextInput();
+        return;
+      }
       if (annotationTool === 'text') {
         setTextInput({ x: pt.x, y: pt.y, value: '' });
+        return;
+      }
+      if (annotationTool === 'eraser') {
+        dragRef.current = { mode: 'erase', startX: pt.x, startY: pt.y };
+        setDragActive(true);
+        handleDragMove(pt);
         return;
       }
       if (annotationTool === 'node') {
@@ -344,6 +401,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
         const hit = hitTestNode(network, pt, dims.w);
         if (hit) {
           dragRef.current = { mode: 'conductor', startX: pt.x, startY: pt.y };
+          setDragActive(true);
           setConductorDraft({ fromId: hit.id, x1: hit.x, y1: hit.y, x2: pt.x, y2: pt.y });
         }
         return;
@@ -361,6 +419,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
             nodeId: nodeHit.id,
             nodeOrig: { x: nodeHit.x, y: nodeHit.y },
           };
+          setDragActive(true);
           return;
         }
         const condHit = hitTestConductor(network, pt, dims.w);
@@ -381,17 +440,19 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
             annId: hit.id,
             orig: hit,
           };
+          setDragActive(true);
         }
         return;
       }
       beginDraw(pt);
     },
-    [annotationTool, annotations, beginDraw, dims, eventToImage, isRadiometric, matrix, network, addNetNode, selectNetElement, valueSuffix],
+    [annotationTool, annotations, beginDraw, dims, eventToImage, isRadiometric, matrix, network, addNetNode, selectNetElement, valueSuffix, textInput, commitTextInput, handleDragMove],
   );
 
   const handlePointerUp = useCallback(() => {
     const drag = dragRef.current;
     dragRef.current = null;
+    setDragActive(false);
     if (!drag) return;
     if (drag.mode === 'draw' && draft) {
       // Discard degenerate shapes (tiny click without drag)
@@ -434,6 +495,11 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
       if (drag.moved) {
         setNetwork(useThermalStore.getState().network, true);
       }
+    } else if (drag.mode === 'erase') {
+      // One write for the whole erase stroke
+      if (drag.erased) {
+        setAnnotations(useThermalStore.getState().annotations, true);
+      }
     }
   }, [draft, setAnnotations, conductorDraft, dims.w, addNetConductor, setNetwork]);
 
@@ -463,26 +529,6 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [annotations, selectedAnnId, setAnnotations, selectedNetElement, removeNetElement]);
-
-  const commitTextInput = useCallback(() => {
-    if (textInput && textInput.value.trim()) {
-      setAnnotations([
-        ...annotations,
-        {
-          id: nextAnnotationId(),
-          type: 'text',
-          color: annotationColor,
-          strokeWidth: annotationStrokeWidth,
-          x: textInput.x,
-          y: textInput.y,
-          text: textInput.value.trim(),
-          fontSize: Math.max(14, Math.round(dims.w / 36)),
-        },
-      ]);
-      setAnnotationTool('select');
-    }
-    setTextInput(null);
-  }, [annotations, annotationColor, annotationStrokeWidth, dims.w, setAnnotations, setAnnotationTool, textInput]);
 
   // ---- Export composed image (thermal render + annotations baked in) ----
   useEffect(() => {
@@ -526,6 +572,11 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
 
   const stats = analysis?.stats;
   const showCrosshairs = isRadiometric && stats;
+
+  // Video + Select: let empty areas fall through to the player's controls while
+  // drawn shapes and network nodes stay clickable (select / move / Delete).
+  const passThrough = isVideo && annotationTool === 'select' && !dragActive;
+  const hitOnlyPainted = passThrough ? { pointerEvents: 'visiblePainted' as const } : undefined;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -575,9 +626,10 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
               />
             )}
 
-            {/* Annotation + overlay layer (skip for videos so controls stay clickable
-                unless a drawing tool is active) */}
-            {(!isVideo || annotationTool !== 'select') && (
+            {/* Annotation + overlay layer — always mounted so annotations stay
+                visible on videos; in Select mode only painted shapes take the
+                pointer there, so the native controls remain clickable */}
+            {(
               <svg
                 ref={svgRef}
                 viewBox={`0 0 ${dims.w} ${dims.h}`}
@@ -589,14 +641,18 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
                       ? 'default'
                       : annotationTool === 'text'
                         ? 'text'
-                        : 'crosshair',
+                        : annotationTool === 'eraser'
+                          ? 'none' // the eraser ring below is the cursor
+                          : 'crosshair',
                   touchAction: 'none',
+                  pointerEvents: passThrough ? 'none' : 'auto',
                 }}
                 onMouseMove={handleMouseMove}
                 onMouseDown={handlePointerDown}
                 onMouseUp={handlePointerUp}
                 onMouseLeave={() => {
                   setCursorInfo(null);
+                  setEraserPt(null);
                   handlePointerUp();
                 }}
               >
@@ -651,20 +707,38 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
                 ))}
 
                 {/* Persisted annotations */}
-                {annotations.map((a) => (
-                  <AnnotationShape key={a.id} a={a} selected={a.id === selectedAnnId} />
-                ))}
+                <g style={hitOnlyPainted}>
+                  {annotations.map((a) => (
+                    <AnnotationShape key={a.id} a={a} selected={a.id === selectedAnnId} />
+                  ))}
+                </g>
                 {/* Draft being drawn */}
                 {draft && <AnnotationShape a={draft.annotation} selected={false} />}
 
+                {/* Eraser cursor ring */}
+                {annotationTool === 'eraser' && eraserPt && (
+                  <circle
+                    cx={eraserPt.x}
+                    cy={eraserPt.y}
+                    r={eraserRadiusFor(dims.w)}
+                    fill="rgba(255,255,255,0.15)"
+                    stroke="#fff"
+                    strokeWidth={Math.max(1, dims.w / 500)}
+                    strokeDasharray={`${dims.w / 150} ${dims.w / 250}`}
+                    pointerEvents="none"
+                  />
+                )}
+
                 {/* Heat-flow network overlay */}
-                <NetworkLayer
-                  network={network}
-                  result={networkResult}
-                  selected={selectedNetElement}
-                  dims={dims}
-                  conductorDraft={conductorDraft}
-                />
+                <g style={hitOnlyPainted}>
+                  <NetworkLayer
+                    network={network}
+                    result={networkResult}
+                    selected={selectedNetElement}
+                    dims={dims}
+                    conductorDraft={conductorDraft}
+                  />
+                </g>
               </svg>
             )}
 

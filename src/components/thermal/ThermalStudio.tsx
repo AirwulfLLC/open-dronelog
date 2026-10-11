@@ -12,7 +12,8 @@ import { isThermalSupported } from '@/lib/thermalApi';
 import * as thermalApi from '@/lib/thermalApi';
 import { ThermalViewer } from './ThermalViewer';
 import { AnalysisPanel } from './AnalysisPanel';
-import { ReportBuilder } from './ReportBuilder';
+import { ThermalReportBuilder } from '@/components/reports/ThermalReportBuilder';
+import { ColorPicker } from './ColorPicker';
 import { METASHAPE_KIND_LABELS, hasDisplayableImage, parseMetashapeMeta } from '@/types/thermal';
 import { isWebMode } from '@/lib/api';
 import type { AnnotationTool, ThermalAsset } from '@/types/thermal';
@@ -23,12 +24,11 @@ const TOOLS: Array<{ key: AnnotationTool; label: string; icon: string; title: st
   { key: 'circle', label: 'Circle', icon: '◯', title: 'Draw ellipse' },
   { key: 'rect', label: 'Box', icon: '▭', title: 'Draw rectangle' },
   { key: 'freehand', label: 'Draw', icon: '✎', title: 'Freehand drawing' },
-  { key: 'text', label: 'Text', icon: 'T', title: 'Add text label' },
+  { key: 'text', label: 'Text', icon: 'T', title: 'Add text label (click, type, Enter)' },
+  { key: 'eraser', label: 'Erase', icon: '⌫', title: 'Eraser — drag over annotations to remove them (freehand strokes are cut, shapes and labels removed)' },
   { key: 'node', label: 'Node', icon: '⬤', title: 'Place a heat-flow computation node (samples image temperature)' },
   { key: 'conductor', label: 'Link', icon: '⌁', title: 'Connect two nodes with a conductor (drag node → node)' },
 ];
-
-const ANNOTATION_COLORS = ['#ff3b30', '#ff9f0a', '#ffd60a', '#30d158', '#0a84ff', '#bf5af2', '#ffffff', '#000000'];
 
 export function ThermalStudio() {
   const {
@@ -360,17 +360,7 @@ export function ThermalStudio() {
                   </button>
                 ))}
                 <div className="w-px h-5 bg-gray-700 mx-1" />
-                {ANNOTATION_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setAnnotationStyle(c)}
-                    className={`w-4 h-4 rounded-full border ${
-                      annotationColor === c ? 'ring-2 ring-sky-400 border-white' : 'border-gray-600'
-                    }`}
-                    style={{ backgroundColor: c }}
-                    title={c}
-                  />
-                ))}
+                <ColorPicker color={annotationColor} onChange={(c) => setAnnotationStyle(c)} />
                 <div className="w-px h-5 bg-gray-700 mx-1" />
                 <button
                   onClick={() => {
@@ -452,7 +442,7 @@ export function ThermalStudio() {
 
       {/* Report builder modal */}
       {showReportBuilder && (
-        <ReportBuilder
+        <ThermalReportBuilder
           onClose={() => setShowReportBuilder(false)}
           exportComposedImage={exportComposedRef}
         />

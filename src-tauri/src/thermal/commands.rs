@@ -1033,6 +1033,8 @@ pub async fn thermal_set_annotations(
 pub struct ThermalReportMeta {
     pub id: i64,
     pub name: String,
+    /// Report workflow: "thermal" or "photogrammetry".
+    pub kind: String,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -1045,9 +1047,10 @@ pub async fn thermal_list_reports(
     let rows = db.list_thermal_reports().map_err(|e| e.to_string())?;
     Ok(rows
         .into_iter()
-        .map(|(id, name, created_at, updated_at)| ThermalReportMeta {
+        .map(|(id, name, kind, created_at, updated_at)| ThermalReportMeta {
             id,
             name,
+            kind,
             created_at,
             updated_at,
         })

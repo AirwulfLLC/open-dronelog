@@ -430,6 +430,7 @@ impl Database {
                 id              BIGINT PRIMARY KEY,
                 name            VARCHAR NOT NULL,
                 report_json     VARCHAR NOT NULL,
+                kind            VARCHAR DEFAULT 'thermal',  -- report workflow: 'thermal' or 'photogrammetry'
                 created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
@@ -438,6 +439,7 @@ impl Database {
 
         // Run selective migrations only for missing columns
         Self::migrate_thermal_assets_table(&conn)?;
+        Self::migrate_thermal_reports_table(&conn)?;
         Self::migrate_flights_table(&conn)?;
         Self::migrate_telemetry_table(&conn)?;
         Self::migrate_flight_tags_table(&conn)?;
@@ -2681,6 +2683,24 @@ impl Database {
         Ok(())
     }
 
+    /// Reports saved before the workflows were split have no `kind`; they are
+    /// all thermal inspection reports.
+    fn migrate_thermal_reports_table(conn: &Connection) -> Result<(), DatabaseError> {
+        let cols = match Self::get_table_columns(conn, "thermal_reports") {
+            Ok(c) => c,
+            Err(_) => return Ok(()),
+        };
+        if cols.is_empty() {
+            return Ok(());
+        }
+        if !cols.contains("kind") {
+            conn.execute_batch(
+                "ALTER TABLE thermal_reports ADD COLUMN kind VARCHAR DEFAULT 'thermal';",
+            )?;
+        }
+        Ok(())
+    }
+
     fn thermal_asset_from_row(row: &duckdb::Row) -> Result<crate::thermal::ThermalAsset, duckdb::Error> {
         Ok(crate::thermal::ThermalAsset {
             id: row.get(0)?,
@@ -2840,23 +2860,34 @@ impl Database {
         Ok(())
     }
 
-    /// List saved thermal reports: (id, name, created_at, updated_at), newest first.
+    /// List saved reports: (id, name, kind, created_at, updated_at), newest first.
     pub fn list_thermal_reports(
         &self,
-    ) -> Result<Vec<(i64, String, Option<String>, Option<String>)>, DatabaseError> {
+    ) -> Result<Vec<(i64, String, String, Option<String>, Option<String>)>, DatabaseError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, CAST(created_at AS VARCHAR), CAST(updated_at AS VARCHAR) \
+            "SELECT id, name, COALESCE(kind, 'thermal'), CAST(created_at AS VARCHAR), \
+             CAST(updated_at AS VARCHAR) \
              FROM thermal_reports ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
         })?;
         let mut reports = Vec::new();
         for row in rows {
             reports.push(row?);
         }
         Ok(reports)
+    }
+
+    /// The report workflow a stored document belongs to, read from its JSON
+    /// (`"kind"`); documents without one are thermal inspection reports.
+    fn report_kind_of(report_json: &str) -> String {
+        serde_json::from_str::<serde_json::Value>(report_json)
+            .ok()
+            .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string))
+            .filter(|k| !k.is_empty())
+            .unwrap_or_else(|| "thermal".to_string())
     }
 
     /// Get a saved report's JSON body.
@@ -2878,20 +2909,21 @@ impl Database {
         report_json: &str,
     ) -> Result<i64, DatabaseError> {
         let conn = self.conn.lock().unwrap();
+        let kind = Self::report_kind_of(report_json);
         match id {
             Some(existing) => {
                 conn.execute(
-                    "UPDATE thermal_reports SET name = ?, report_json = ?, updated_at = CURRENT_TIMESTAMP \
-                     WHERE id = ?",
-                    params![name, report_json, existing],
+                    "UPDATE thermal_reports SET name = ?, report_json = ?, kind = ?, \
+                     updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    params![name, report_json, kind, existing],
                 )?;
                 Ok(existing)
             }
             None => {
                 let new_id = crate::thermal::next_id();
                 conn.execute(
-                    "INSERT INTO thermal_reports (id, name, report_json) VALUES (?, ?, ?)",
-                    params![new_id, name, report_json],
+                    "INSERT INTO thermal_reports (id, name, report_json, kind) VALUES (?, ?, ?, ?)",
+                    params![new_id, name, report_json, kind],
                 )?;
                 Ok(new_id)
             }

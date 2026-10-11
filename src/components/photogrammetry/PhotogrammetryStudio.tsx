@@ -14,7 +14,8 @@ import { usePhotogrammetryStore, type PhotoTool } from '@/stores/photogrammetryS
 import { isThermalSupported } from '@/lib/thermalApi';
 import { isWebMode } from '@/lib/api';
 import { fmtFrameTime } from '@/lib/photogrammetryExport';
-import { ReportBuilder } from '@/components/thermal/ReportBuilder';
+import { PhotogrammetryReportBuilder } from '@/components/reports/PhotogrammetryReportBuilder';
+import { ColorPicker } from '@/components/thermal/ColorPicker';
 import { PhotoViewer } from './PhotoViewer';
 import type { PhotogrammetryEntry, ThermalAsset } from '@/types/thermal';
 
@@ -24,10 +25,9 @@ const TOOLS: Array<{ key: PhotoTool; label: string; icon: string; title: string 
   { key: 'circle', label: 'Circle', icon: '◯', title: 'Draw ellipse' },
   { key: 'rect', label: 'Box', icon: '▭', title: 'Draw rectangle' },
   { key: 'freehand', label: 'Draw', icon: '✎', title: 'Freehand drawing' },
-  { key: 'text', label: 'Text', icon: 'T', title: 'Add text label' },
+  { key: 'text', label: 'Text', icon: 'T', title: 'Add text label (click, type, Enter)' },
+  { key: 'eraser', label: 'Erase', icon: '⌫', title: 'Eraser — drag over annotations to remove them (freehand strokes are cut, shapes and labels removed)' },
 ];
-
-const ANNOTATION_COLORS = ['#ff3b30', '#ff9f0a', '#ffd60a', '#30d158', '#0a84ff', '#bf5af2', '#ffffff', '#000000'];
 
 const MEDIA_EXTS = new Set(['jpg', 'jpeg', 'png', 'mp4', 'mov', 'avi']);
 
@@ -77,9 +77,6 @@ export function PhotogrammetryStudio() {
   const [dragState, setDragState] = useState<{ id: string; overIndex: number | null } | null>(null);
   const dragStateRef = useRef(dragState);
   dragStateRef.current = dragState;
-  // ReportBuilder composes the thermal studio's live view through this ref;
-  // from here there is none, so it falls back to stored files.
-  const noComposedImage = useRef<(() => Promise<string | null>) | null>(null);
 
   useEffect(() => {
     if (!isThermalSupported()) return;
@@ -342,9 +339,9 @@ export function PhotogrammetryStudio() {
                   Open report builder…
                 </button>
                 <div className="px-3 py-1.5 text-[10px] text-gray-500 border-t border-gray-700 mt-1">
-                  Queued figures export in the Photogrammetry Imagery section of the
-                  inspection report (PDF/RTF) with their annotations, in the order shown
-                  on the right.
+                  Build a photogrammetry survey report (PDF/RTF): scope, flights,
+                  Metashape outputs, the queued figures in the order shown on the right,
+                  findings and conclusions.
                 </div>
               </div>
             )}
@@ -447,17 +444,7 @@ export function PhotogrammetryStudio() {
                   </button>
                 ))}
                 <div className="w-px h-5 bg-gray-700 mx-1" />
-                {ANNOTATION_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setAnnotationStyle(c)}
-                    className={`w-4 h-4 rounded-full border ${
-                      annotationColor === c ? 'ring-2 ring-sky-400 border-white' : 'border-gray-600'
-                    }`}
-                    style={{ backgroundColor: c }}
-                    title={c}
-                  />
-                ))}
+                <ColorPicker color={annotationColor} onChange={(c) => setAnnotationStyle(c)} />
                 <div className="w-px h-5 bg-gray-700 mx-1" />
                 <button
                   onClick={() => {
@@ -586,10 +573,7 @@ export function PhotogrammetryStudio() {
       </div>
 
       {showReportBuilder && (
-        <ReportBuilder
-          onClose={() => setShowReportBuilder(false)}
-          exportComposedImage={noComposedImage}
-        />
+        <PhotogrammetryReportBuilder onClose={() => setShowReportBuilder(false)} />
       )}
     </div>
   );

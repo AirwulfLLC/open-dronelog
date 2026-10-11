@@ -14,6 +14,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePhotogrammetryStore } from '@/stores/photogrammetryStore';
 import {
   AnnotationShape,
+  eraseAt,
+  eraserRadiusFor,
   hitTest,
   isDegenerateAnnotation,
   nextAnnotationId,
@@ -58,12 +60,16 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
   // Mirrors dragRef for rendering: while a drag is live the whole overlay must
   // take the pointer, even in the pass-through (video + Select) mode.
   const [dragActive, setDragActive] = useState(false);
+  /** Pointer position while the eraser tool is active (drives its cursor ring). */
+  const [eraserPt, setEraserPt] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{
-    mode: 'draw' | 'move';
+    mode: 'draw' | 'move' | 'erase';
     startX: number;
     startY: number;
     annId?: string;
     orig?: Annotation;
+    /** Set once an erase drag actually removed something. */
+    erased?: boolean;
   } | null>(null);
 
   const isVideo = asset.assetType === 'video';
@@ -155,19 +161,47 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
         // Read the live list — the closure copy can be stale mid-drag
         const current = usePhotogrammetryStore.getState().annotations;
         setAnnotations(current.map((a) => (a.id === drag.annId ? moved : a)), false);
+      } else if (drag.mode === 'erase') {
+        const current = usePhotogrammetryStore.getState().annotations;
+        const next = eraseAt(current, pt, eraserRadiusFor(dims.w));
+        if (next !== current) {
+          drag.erased = true;
+          setAnnotations(next, false); // persisted once on pointer up
+        }
       }
     },
-    [setAnnotations],
+    [setAnnotations, dims.w],
   );
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (!dragRef.current) return;
       const pt = eventToImage(e);
-      if (pt) handleDragMove(pt);
+      if (!pt) return;
+      if (annotationTool === 'eraser') setEraserPt(pt);
+      if (dragRef.current) handleDragMove(pt);
     },
-    [eventToImage, handleDragMove],
+    [eventToImage, handleDragMove, annotationTool],
   );
+
+  const commitTextInput = useCallback(() => {
+    if (textInput && textInput.value.trim()) {
+      setAnnotations([
+        ...annotations,
+        {
+          id: nextAnnotationId(),
+          type: 'text',
+          color: annotationColor,
+          strokeWidth: annotationStrokeWidth,
+          x: textInput.x,
+          y: textInput.y,
+          text: textInput.value.trim(),
+          fontSize: Math.max(14, Math.round(dims.w / 36)),
+        },
+      ]);
+      setAnnotationTool('select');
+    }
+    setTextInput(null);
+  }, [annotations, annotationColor, annotationStrokeWidth, dims.w, setAnnotations, setAnnotationTool, textInput]);
 
   const beginDraw = useCallback(
     (pt: { x: number; y: number }) => {
@@ -198,10 +232,25 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
 
   const handlePointerDown = useCallback(
     (e: React.MouseEvent) => {
+      // The default mousedown action moves focus to the (unfocusable) SVG,
+      // which would blur — and thereby dismiss — the text input created
+      // below in the same event. It also starts no text selection/drag.
+      e.preventDefault();
       const pt = eventToImage(e);
       if (!pt) return;
+      // A click anywhere while a label is being typed commits that label
+      if (textInput) {
+        commitTextInput();
+        return;
+      }
       if (annotationTool === 'text') {
         setTextInput({ x: pt.x, y: pt.y, value: '' });
+        return;
+      }
+      if (annotationTool === 'eraser') {
+        dragRef.current = { mode: 'erase', startX: pt.x, startY: pt.y };
+        setDragActive(true);
+        handleDragMove(pt);
         return;
       }
       if (annotationTool === 'select') {
@@ -216,7 +265,7 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
       }
       beginDraw(pt);
     },
-    [annotationTool, annotations, beginDraw, dims.w, eventToImage],
+    [annotationTool, annotations, beginDraw, dims.w, eventToImage, textInput, commitTextInput, handleDragMove],
   );
 
   const handlePointerUp = useCallback(() => {
@@ -232,6 +281,11 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
     } else if (drag.mode === 'move') {
       // Persist the final position (the live list, not the closure copy)
       setAnnotations(usePhotogrammetryStore.getState().annotations, true);
+    } else if (drag.mode === 'erase') {
+      // One write for the whole erase stroke
+      if (drag.erased) {
+        setAnnotations(usePhotogrammetryStore.getState().annotations, true);
+      }
     }
   }, [draft, setAnnotations]);
 
@@ -257,26 +311,6 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [annotations, selectedAnnId, setAnnotations]);
-
-  const commitTextInput = useCallback(() => {
-    if (textInput && textInput.value.trim()) {
-      setAnnotations([
-        ...annotations,
-        {
-          id: nextAnnotationId(),
-          type: 'text',
-          color: annotationColor,
-          strokeWidth: annotationStrokeWidth,
-          x: textInput.x,
-          y: textInput.y,
-          text: textInput.value.trim(),
-          fontSize: Math.max(14, Math.round(dims.w / 36)),
-        },
-      ]);
-      setAnnotationTool('select');
-    }
-    setTextInput(null);
-  }, [annotations, annotationColor, annotationStrokeWidth, dims.w, setAnnotations, setAnnotationTool, textInput]);
 
   const captureFrame = useCallback(() => {
     const video = videoRef.current;
@@ -372,14 +406,19 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
                       ? 'default'
                       : annotationTool === 'text'
                         ? 'text'
-                        : 'crosshair',
+                        : annotationTool === 'eraser'
+                          ? 'none' // the eraser ring below is the cursor
+                          : 'crosshair',
                   touchAction: 'none',
                   pointerEvents: passThrough ? 'none' : 'auto',
                 }}
                 onMouseMove={handleMouseMove}
                 onMouseDown={handlePointerDown}
                 onMouseUp={handlePointerUp}
-                onMouseLeave={handlePointerUp}
+                onMouseLeave={() => {
+                  setEraserPt(null);
+                  handlePointerUp();
+                }}
               >
                 {/* In pass-through mode the painted shapes re-enable hit
                     testing, so they can still be selected over the video */}
@@ -389,6 +428,19 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
                   ))}
                 </g>
                 {draft && <AnnotationShape a={draft} selected={false} />}
+                {/* Eraser cursor ring */}
+                {annotationTool === 'eraser' && eraserPt && (
+                  <circle
+                    cx={eraserPt.x}
+                    cy={eraserPt.y}
+                    r={eraserRadiusFor(dims.w)}
+                    fill="rgba(255,255,255,0.15)"
+                    stroke="#fff"
+                    strokeWidth={Math.max(1, dims.w / 500)}
+                    strokeDasharray={`${dims.w / 150} ${dims.w / 250}`}
+                    pointerEvents="none"
+                  />
+                )}
               </svg>
 
               {textInput && (
