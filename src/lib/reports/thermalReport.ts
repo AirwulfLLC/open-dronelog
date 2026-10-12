@@ -44,7 +44,7 @@ export interface ThermalPrepared {
 }
 
 export function renderThermalReport(w: ReportWriter, report: ThermalReport, p: ThermalPrepared): void {
-  w.title('Thermal Inspection Report', generatedBy('DJI Thermal SDK'));
+  w.title('Thermal Inspection Report', generatedBy('Thermal inspection workflow'));
   headerData(w, report, THERMAL_HEADER_LABELS);
 
   if (report.summary.trim() || w.editable) {

@@ -59,7 +59,7 @@ export function renderPhotogrammetryReport(
   report: PhotogrammetryReport,
   p: PhotogrammetryPrepared,
 ): void {
-  w.title('Photogrammetry Survey Report', generatedBy('Agisoft Metashape workflow'));
+  w.title('Photogrammetry Survey Report', generatedBy('Photogrammetry survey workflow'));
   headerData(
     w,
     report,
