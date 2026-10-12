@@ -113,7 +113,13 @@ pub async fn thermal_export_bundle(
         if !src.exists() {
             continue;
         }
-        let archive_file = format!("assets/{}_{}", asset.id, asset.file_name);
+        // The display name may carry spaces and punctuation (renames); the
+        // archive entry uses the folder-safe form, the manifest keeps the name
+        let archive_file = format!(
+            "assets/{}_{}",
+            asset.id,
+            super::commands::sanitize_file_name(&asset.file_name)
+        );
         let preview_src = super::commands::preview_path_for(&asset).filter(|p| p.exists());
         let preview_file = preview_src
             .as_ref()
@@ -470,7 +476,11 @@ pub async fn thermal_import_bundle(
                 asset.is_radiometric = false;
             }
             asset.id = new_id;
-            asset.file_name = safe_name;
+            // Keep the display name the bundle's author chose (a rename such as
+            // "North wall.JPG"); only the stored path uses the sanitized form.
+            // Names a crafted manifest could abuse fall back to that form.
+            asset.file_name = super::display_name_for_rename(&safe_name, &entry.asset.file_name)
+                .unwrap_or_else(|_| safe_name.clone());
             asset.stored_path = stored_path.to_string_lossy().to_string();
             asset.imported_at = None;
             asset.meta_json = meta_json;

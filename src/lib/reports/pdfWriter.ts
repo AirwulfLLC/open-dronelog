@@ -241,7 +241,8 @@ export class PdfWriter implements ReportWriter {
     const colW = (this.contentW - 6) / 2;
     const imgH = colW * 0.75;
     const title = `${spec.index}. ${spec.caption || 'Imaging pair'}`;
-    this.checkPage(imgH + 21 + this.lineCount(title, 10, true) * 5);
+    const details = spec.details?.trim() ?? '';
+    this.checkPage(imgH + 21 + this.lineCount(title, 10, true) * 5 + (details ? 5 : 0));
     this.subheading(title);
 
     doc.setFontSize(8);
@@ -260,6 +261,7 @@ export class PdfWriter implements ReportWriter {
     draw(spec.leftImage, this.margin);
     draw(spec.rightImage, this.margin + colW + 6);
     this.y += imgH + 4;
+    if (details) this.smallText(details);
   }
 
   notes(notes: NoteSpec[]): void {

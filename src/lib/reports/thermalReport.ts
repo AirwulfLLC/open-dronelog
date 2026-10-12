@@ -8,7 +8,7 @@
  */
 
 import { CLASSIFICATION_LABELS } from '@/types/thermal';
-import type { ThermalReport } from '@/types/thermal';
+import type { ThermalAsset, ThermalReport } from '@/types/thermal';
 import {
   SEVERITY_LABELS,
   THERMAL_HEADER_LABELS,
@@ -34,13 +34,34 @@ export interface PairNote {
 }
 
 export interface ReportImages {
-  /** entry.id → data URLs (PNG/JPEG) and the pictures' notes */
-  [entryId: string]: { thermal: string | null; visual: string | null; notes: PairNote[] };
+  /** entry.id → data URLs (PNG/JPEG), the pictures' notes and provenance line */
+  [entryId: string]: {
+    thermal: string | null;
+    visual: string | null;
+    notes: PairNote[];
+    /** Picture names (as named in the library), capture time, position. */
+    details?: string;
+  };
 }
 
 export interface ThermalPrepared {
   images: ReportImages;
   extras: OrthoExtras;
+}
+
+/** Provenance line printed under an imaging pair: the pictures' names as they
+ *  read in the library (renames included), then the capture time and position
+ *  of the thermal picture (or the visual one when there is no thermal). */
+export function pairDetails(visual: ThermalAsset | null, thermal: ThermalAsset | null): string {
+  const shot = thermal ?? visual;
+  return [
+    visual ? `Visual: ${visual.fileName}` : null,
+    thermal ? `Thermal: ${thermal.fileName}` : null,
+    shot?.capturedAt ?? null,
+    shot && shot.gpsLat != null && shot.gpsLon != null ? fmtGps(shot.gpsLat, shot.gpsLon) : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 export function renderThermalReport(w: ReportWriter, report: ThermalReport, p: ThermalPrepared): void {
@@ -72,6 +93,7 @@ export function renderThermalReport(w: ReportWriter, report: ThermalReport, p: T
       leftImage: pair.visual,
       rightLabel: 'Thermal (Infrared)',
       rightImage: pair.thermal,
+      details: pair.details,
     });
     if (entry.lrfData.trim() || w.editable) {
       w.kv('LRF / Range Data', entry.lrfData, edit(`imagingLog.${i}.lrfData`, true), { compact: true });

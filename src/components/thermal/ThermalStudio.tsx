@@ -16,6 +16,7 @@ import { AnalysisPanel } from './AnalysisPanel';
 import { ThermalReportBuilder } from '@/components/reports/ThermalReportBuilder';
 import { ColorPicker } from './ColorPicker';
 import { MetashapeDocCard } from './MetashapeDocCard';
+import { AssetNameEditor } from './AssetNameEditor';
 import { METASHAPE_KIND_LABELS, hasDisplayableImage, parseMetashapeMeta } from '@/types/thermal';
 import { isWebMode } from '@/lib/api';
 import type { AnnotationTool, ThermalAsset } from '@/types/thermal';
@@ -55,11 +56,21 @@ export function ThermalStudio() {
     annotations,
     setAnnotations,
     setAssetNotes,
+    renameAsset,
   } = useThermalStore();
 
   const [showReportBuilder, setShowReportBuilder] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [reportMenuOpen, setReportMenuOpen] = useState(false);
+  /** Library item whose name is being edited inline. */
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const startRename = useCallback((assetId: number) => {
+    setRenamingId(assetId);
+    // Started from the info strip: bring the row's editor into view
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-asset-row="${assetId}"]`)?.scrollIntoView({ block: 'nearest' });
+    });
+  }, []);
   const exportComposedRef = useRef<(() => Promise<string | null>) | null>(null);
   const reportMenuRef = useRef<HTMLDivElement>(null);
 
@@ -346,7 +357,11 @@ export function ThermalStudio() {
                 key={a.id}
                 asset={a}
                 selected={a.id === selectedAssetId}
+                renaming={a.id === renamingId}
                 onSelect={() => selectAsset(a.id)}
+                onRenameStart={() => startRename(a.id)}
+                onRenameCommit={(name) => renameAsset(a.id, name)}
+                onRenameDone={() => setRenamingId((id) => (id === a.id ? null : id))}
                 onDelete={() => {
                   if (window.confirm(`Delete "${a.fileName}" from the thermal library?`)) {
                     deleteAsset(a.id);
@@ -446,7 +461,16 @@ export function ThermalStudio() {
 
               {/* Asset info strip */}
               <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500 flex flex-wrap gap-x-4 gap-y-0.5">
-                <span className="text-gray-300">{selectedAsset.fileName}</span>
+                <span className="text-gray-300 flex items-center gap-1">
+                  {selectedAsset.fileName}
+                  <button
+                    onClick={() => startRename(selectedAsset.id)}
+                    className="text-gray-500 hover:text-white"
+                    title="Rename — the name is printed in reports"
+                  >
+                    ✏️
+                  </button>
+                </span>
                 {selectedAsset.cameraModel && <span>{selectedAsset.cameraModel}</span>}
                 {selectedAsset.isRadiometric ? (
                   <span className="text-emerald-400">Radiometric · {selectedAsset.width}×{selectedAsset.height}</span>
@@ -520,35 +544,74 @@ function assetSubtitle(asset: ThermalAsset): string {
 function AssetRow({
   asset,
   selected,
+  renaming,
   onSelect,
+  onRenameStart,
+  onRenameCommit,
+  onRenameDone,
   onDelete,
 }: {
   asset: ThermalAsset;
   selected: boolean;
+  renaming: boolean;
   onSelect: () => void;
+  onRenameStart: () => void;
+  onRenameCommit: (fileName: string) => Promise<void>;
+  onRenameDone: () => void;
   onDelete: () => void;
 }) {
   return (
     <div
+      data-asset-row={asset.id}
       onClick={onSelect}
       className={`group px-3 py-2 border-b border-gray-800 cursor-pointer text-xs ${
         selected ? 'bg-drone-primary/15 border-l-2 border-l-drone-primary' : 'hover:bg-gray-800/50'
       }`}
     >
       <div className="flex items-center justify-between gap-1">
-        <span className={`truncate ${selected ? 'text-white font-medium' : 'text-gray-300'}`}>
-          {assetIcon(asset)} {asset.fileName}
-        </span>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 flex-shrink-0"
-          title="Delete asset"
-        >
-          🗑
-        </button>
+        {renaming ? (
+          <AssetNameEditor
+            className="flex-1 min-w-0"
+            fileName={asset.fileName}
+            onCommit={onRenameCommit}
+            onDone={onRenameDone}
+          />
+        ) : (
+          <>
+            <span
+              className={`truncate ${selected ? 'text-white font-medium' : 'text-gray-300'}`}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onRenameStart();
+              }}
+              title="Double-click to rename"
+            >
+              {assetIcon(asset)} {asset.fileName}
+            </span>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRenameStart();
+                }}
+                className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-white"
+                title="Rename — the name is printed in reports"
+              >
+                ✏️
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete();
+                }}
+                className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400"
+                title="Delete asset"
+              >
+                🗑
+              </button>
+            </div>
+          </>
+        )}
       </div>
       <div className="text-[10px] text-gray-500 mt-0.5">
         {assetSubtitle(asset)}

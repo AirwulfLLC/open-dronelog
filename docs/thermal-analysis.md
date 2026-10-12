@@ -161,6 +161,15 @@ It is printed under the picture wherever it appears in a report — under a
 thermal imaging pair or a survey figure — and can also be edited in the
 report preview.
 
+**✏️ Rename** (hover a library item, double-click its name, or use the pencil
+next to the name under the viewer) changes a picture's name in either library.
+The name is what the reports print — under each thermal imaging pair
+("Visual: … · Thermal: …"), in the source line under each survey figure and
+in the deliverables list — so `DJI_0417.JPG` can read `North wall – bay 3.JPG`
+in the finished report. The extension is kept (it tells the app how to serve
+the file) and the stored file is left untouched; renames travel in inspection
+bundles.
+
 ### Photogrammetry tab (report imagery)
 
 The **Photogrammetry** dashboard tab assembles the imagery of a photogrammetry

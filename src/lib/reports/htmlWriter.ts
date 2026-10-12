@@ -170,7 +170,8 @@ export class HtmlWriter implements ReportWriter {
     this.parts.push(
       `<h3><b>${spec.index}.</b> <span${editableAttrs(cap, 'Imaging pair')}>${escapeHtml(spec.caption)}</span></h3>` +
         `<div class="pair"><div><div class="lbl">${escapeHtml(spec.leftLabel)}</div>${this.img(spec.leftImage, 'No image')}</div>` +
-        `<div><div class="lbl">${escapeHtml(spec.rightLabel)}</div>${this.img(spec.rightImage, 'No image')}</div></div>`,
+        `<div><div class="lbl">${escapeHtml(spec.rightLabel)}</div>${this.img(spec.rightImage, 'No image')}</div></div>` +
+        (spec.details?.trim() ? `<p class="small">${escapeHtml(spec.details)}</p>` : ''),
     );
   }
 

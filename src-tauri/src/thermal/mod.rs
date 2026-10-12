@@ -99,6 +99,53 @@ pub fn asset_type_for(file_name: &str) -> Option<&'static str> {
     }
 }
 
+/// Longest display name a rename accepts (characters).
+pub const MAX_DISPLAY_NAME_CHARS: usize = 200;
+
+/// The display name an asset gets when the user renames it. The display name
+/// is what the libraries list and the reports print; the file on disk keeps
+/// its internal `{id}_{sanitized}` name, so the display name may carry spaces
+/// and punctuation — only path separators, control characters and names
+/// without a stem are refused. The extension is locked to the current one
+/// (typed or not, in any case): it decides how the file is served (MIME type)
+/// and probed, and the user is naming the picture, not converting it.
+pub fn display_name_for_rename(current_file_name: &str, requested: &str) -> Result<String, String> {
+    let name = requested.trim();
+    if name.chars().any(|c| c == '/' || c == '\\' || c.is_control()) {
+        return Err("The name cannot contain slashes or control characters.".to_string());
+    }
+    let ext = Path::new(current_file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let suffix = if ext.is_empty() { String::new() } else { format!(".{ext}") };
+    // Drop a typed copy of the extension (any letter case) — it is re-added
+    // below. `get` refuses a cut inside a multibyte character, so a non-ASCII
+    // name is simply treated as having no typed extension.
+    let stem = if suffix.is_empty() {
+        name
+    } else {
+        name.len()
+            .checked_sub(suffix.len())
+            .and_then(|cut| name.get(..cut).zip(name.get(cut..)))
+            .filter(|(_, typed_ext)| typed_ext.eq_ignore_ascii_case(&suffix))
+            .map(|(stem, _)| stem)
+            .unwrap_or(name)
+    };
+    // Trailing dots/spaces would read as a different extension or vanish on
+    // some file systems; a dot-only or empty stem is no name at all
+    let stem = stem.trim_end_matches(|c: char| c == '.' || c.is_whitespace()).trim();
+    if stem.is_empty() {
+        return Err("Enter a name.".to_string());
+    }
+    if stem.chars().count() + suffix.chars().count() > MAX_DISPLAY_NAME_CHARS {
+        return Err(format!(
+            "The name is too long (at most {MAX_DISPLAY_NAME_CHARS} characters)."
+        ));
+    }
+    Ok(format!("{stem}{suffix}"))
+}
+
 /// Return the thermal-assets folder for a profile
 /// ("default" → `thermal`, anything else → `thermal/{profile}`).
 pub fn thermal_folder(data_dir: &Path, profile: &str) -> std::path::PathBuf {
@@ -207,5 +254,53 @@ impl From<sdk::DirpMeasurementParams> for MeasurementParamsJson {
             reflection,
             ambient_temp,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{display_name_for_rename, MAX_DISPLAY_NAME_CHARS};
+
+    #[test]
+    fn rename_keeps_the_stored_extension() {
+        assert_eq!(display_name_for_rename("DJI_0001.JPG", "North wall").unwrap(), "North wall.JPG");
+        // A typed extension is recognised in any letter case and not doubled
+        assert_eq!(display_name_for_rename("DJI_0001.JPG", "North wall.jpg").unwrap(), "North wall.JPG");
+        assert_eq!(display_name_for_rename("DJI_0001.JPG", "North wall.JPG").unwrap(), "North wall.JPG");
+        // Dots inside the stem are part of the name
+        assert_eq!(display_name_for_rename("a.JPG", "panel 3.v2").unwrap(), "panel 3.v2.JPG");
+        // Another extension is not a conversion — it stays inside the stem
+        assert_eq!(display_name_for_rename("frame.png", "roof.jpg").unwrap(), "roof.jpg.png");
+        // No extension on the stored name: the stem is the whole name
+        assert_eq!(display_name_for_rename("noext", "Roof").unwrap(), "Roof");
+    }
+
+    #[test]
+    fn rename_trims_and_allows_punctuation() {
+        assert_eq!(display_name_for_rename("x.JPG", "  Roof – bay 2, east  ").unwrap(), "Roof – bay 2, east.JPG");
+        assert_eq!(display_name_for_rename("x.JPG", "Roof. ").unwrap(), "Roof.JPG");
+        assert_eq!(display_name_for_rename("x.JPG", "Северная стена").unwrap(), "Северная стена.JPG");
+    }
+
+    #[test]
+    fn rename_refuses_empty_paths_and_control_characters() {
+        for bad in ["", "   ", ".JPG", ".", "..", "...", ". ."] {
+            assert!(display_name_for_rename("x.JPG", bad).is_err(), "{bad:?} should be refused");
+        }
+        assert!(display_name_for_rename("x.JPG", "a/b").is_err());
+        assert!(display_name_for_rename("x.JPG", "a\\b").is_err());
+        assert!(display_name_for_rename("x.JPG", "a\nb").is_err());
+        assert!(display_name_for_rename("x.JPG", "a\u{0}b").is_err());
+        let long = "n".repeat(MAX_DISPLAY_NAME_CHARS);
+        assert!(display_name_for_rename("x.JPG", &long).is_err());
+        assert!(display_name_for_rename("x.JPG", &long[..MAX_DISPLAY_NAME_CHARS - 4]).is_ok());
+    }
+
+    #[test]
+    fn rename_survives_multibyte_text_before_the_extension() {
+        // The extension check cuts at a byte offset; a non-ASCII name whose
+        // tail happens to be the extension's length must not panic
+        assert_eq!(display_name_for_rename("x.JPG", "éé").unwrap(), "éé.JPG");
+        assert_eq!(display_name_for_rename("x.JPG", "ééé.jpg").unwrap(), "ééé.JPG");
     }
 }

@@ -68,6 +68,8 @@ export interface ImagePairSpec {
   leftImage: string | null;
   rightLabel: string;
   rightImage: string | null;
+  /** Provenance line under the pair (picture names, capture time, position). */
+  details?: string;
 }
 
 export interface NoteSpec {

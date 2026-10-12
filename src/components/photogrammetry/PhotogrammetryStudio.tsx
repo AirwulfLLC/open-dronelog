@@ -17,6 +17,7 @@ import { fmtFrameTime } from '@/lib/photogrammetryExport';
 import { PhotogrammetryReportBuilder } from '@/components/reports/PhotogrammetryReportBuilder';
 import { ColorPicker } from '@/components/thermal/ColorPicker';
 import { MetashapeDocCard } from '@/components/thermal/MetashapeDocCard';
+import { AssetNameEditor } from '@/components/thermal/AssetNameEditor';
 import { PhotoViewer } from './PhotoViewer';
 import {
   METASHAPE_KIND_LABELS,
@@ -69,6 +70,7 @@ export function PhotogrammetryStudio() {
   const assetsLoaded = useThermalStore((s) => s.assetsLoaded);
   const loadAssets = useThermalStore((s) => s.loadAssets);
   const setAssetNotes = useThermalStore((s) => s.setAssetNotes);
+  const renameAsset = useThermalStore((s) => s.renameAsset);
   const {
     selectedAssetId,
     assetUrl,
@@ -107,6 +109,15 @@ export function PhotogrammetryStudio() {
   const [showReportBuilder, setShowReportBuilder] = useState(false);
   const [reportMenuOpen, setReportMenuOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
+  /** Library item whose name is being edited inline. */
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const startRename = useCallback((assetId: number) => {
+    setRenamingId(assetId);
+    // Started from the info strip: bring the row's editor into view
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-asset-row="${assetId}"]`)?.scrollIntoView({ block: 'nearest' });
+    });
+  }, []);
   const reportMenuRef = useRef<HTMLDivElement>(null);
   const videoTimeRef = useRef(0);
   // Pointer-driven queue reorder. HTML5 drag-and-drop is deliberately not
@@ -495,8 +506,12 @@ export function PhotogrammetryStudio() {
                 selected={a.id === selectedAssetId}
                 checked={checked.has(a.id)}
                 queued={queuedCount.get(a.id) ?? 0}
+                renaming={a.id === renamingId}
                 onSelect={() => selectAsset(a.id)}
                 onToggleChecked={() => toggleChecked(a.id)}
+                onRenameStart={() => startRename(a.id)}
+                onRenameCommit={(name) => renameAsset(a.id, name)}
+                onRenameDone={() => setRenamingId((id) => (id === a.id ? null : id))}
                 onQuickAdd={() => {
                   const added = addToReport([a.id]);
                   setNotice(added ? `"${a.fileName}" added to the report.` : 'Already in the report.');
@@ -606,7 +621,16 @@ export function PhotogrammetryStudio() {
               />
 
               <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500 flex flex-wrap gap-x-4 gap-y-0.5">
-                <span className="text-gray-300">{selectedAsset.fileName}</span>
+                <span className="text-gray-300 flex items-center gap-1">
+                  {selectedAsset.fileName}
+                  <button
+                    onClick={() => startRename(selectedAsset.id)}
+                    className="text-gray-500 hover:text-white"
+                    title="Rename — the name is printed in the report"
+                  >
+                    ✏️
+                  </button>
+                </span>
                 <span>{assetSubtitle(selectedAsset)}</span>
                 {selectedAsset.cameraModel && <span>{selectedAsset.cameraModel}</span>}
                 {selectedAsset.gpsLat != null && selectedAsset.gpsLon != null && (
@@ -696,8 +720,12 @@ function LibraryRow({
   selected,
   checked,
   queued,
+  renaming,
   onSelect,
   onToggleChecked,
+  onRenameStart,
+  onRenameCommit,
+  onRenameDone,
   onQuickAdd,
   onDelete,
 }: {
@@ -705,13 +733,18 @@ function LibraryRow({
   selected: boolean;
   checked: boolean;
   queued: number;
+  renaming: boolean;
   onSelect: () => void;
   onToggleChecked: () => void;
+  onRenameStart: () => void;
+  onRenameCommit: (fileName: string) => Promise<void>;
+  onRenameDone: () => void;
   onQuickAdd: () => void;
   onDelete: () => void;
 }) {
   return (
     <div
+      data-asset-row={asset.id}
       onClick={onSelect}
       className={`group px-2 py-2 border-b border-gray-800 cursor-pointer text-xs flex items-start gap-2 ${
         selected ? 'bg-drone-primary/15 border-l-2 border-l-drone-primary' : 'hover:bg-gray-800/50'
@@ -732,33 +765,61 @@ function LibraryRow({
       )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-1">
-          <span className={`truncate ${selected ? 'text-white font-medium' : 'text-gray-300'}`}>
-            {assetIcon(asset)} {asset.fileName}
-          </span>
-          <div className="flex items-center gap-1 flex-shrink-0">
-            {canQueue(asset) && (
-              <button
-                onClick={(e) => {
+          {renaming ? (
+            <AssetNameEditor
+              className="flex-1 min-w-0"
+              fileName={asset.fileName}
+              onCommit={onRenameCommit}
+              onDone={onRenameDone}
+            />
+          ) : (
+            <>
+              <span
+                className={`truncate ${selected ? 'text-white font-medium' : 'text-gray-300'}`}
+                onDoubleClick={(e) => {
                   e.stopPropagation();
-                  onQuickAdd();
+                  onRenameStart();
                 }}
-                className="opacity-0 group-hover:opacity-100 text-emerald-400 hover:text-emerald-300"
-                title="Add to report"
+                title="Double-click to rename"
               >
-                +
-              </button>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400"
-              title="Delete from library"
-            >
-              🗑
-            </button>
-          </div>
+                {assetIcon(asset)} {asset.fileName}
+              </span>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                {canQueue(asset) && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onQuickAdd();
+                    }}
+                    className="opacity-0 group-hover:opacity-100 text-emerald-400 hover:text-emerald-300"
+                    title="Add to report"
+                  >
+                    +
+                  </button>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRenameStart();
+                  }}
+                  className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-white"
+                  title="Rename — the name is printed in the report"
+                >
+                  ✏️
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                  }}
+                  className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400"
+                  title="Delete from library"
+                >
+                  🗑
+                </button>
+              </div>
+            </>
+          )}
         </div>
         <div className="text-[10px] text-gray-500 mt-0.5 flex gap-2">
           <span className="truncate">{assetSubtitle(asset)}</span>

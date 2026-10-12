@@ -403,6 +403,23 @@ pub async fn thermal_update_asset_notes(
         .map_err(|e| e.to_string())
 }
 
+/// Rename an asset: the display name the libraries list and the reports
+/// print. The stored file keeps its internal name and the extension stays
+/// (see `display_name_for_rename`). Returns the updated asset.
+#[tauri::command]
+pub async fn thermal_rename_asset(
+    asset_id: i64,
+    file_name: String,
+    state: State<'_, AppState>,
+) -> Result<ThermalAsset, String> {
+    let db = state.db_authenticated()?;
+    let asset = db.get_thermal_asset(asset_id).map_err(|e| e.to_string())?;
+    let name = super::display_name_for_rename(&asset.file_name, &file_name)?;
+    db.update_thermal_asset_file_name(asset_id, &name)
+        .map_err(|e| e.to_string())?;
+    db.get_thermal_asset(asset_id).map_err(|e| e.to_string())
+}
+
 /// Return the raw bytes of a stored asset (for previews / annotation base images).
 #[tauri::command]
 pub async fn thermal_read_asset_file(

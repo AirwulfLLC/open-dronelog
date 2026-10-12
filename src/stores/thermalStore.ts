@@ -80,6 +80,9 @@ interface ThermalState {
   /** Per-picture note printed under the picture in reports (any library). */
   setAssetNotes: (assetId: number, notes: string) => void;
   flushAssetNotes: () => Promise<void>;
+  /** Rename a picture (any library): the name the libraries list and the
+   *  reports print. Rejects with the reason when the name is refused. */
+  renameAsset: (assetId: number, fileName: string) => Promise<void>;
   clearError: () => void;
   setNetwork: (network: ThermalNetworkModel, persist?: boolean) => void;
   addNetNode: (node: NetNode) => void;
@@ -452,6 +455,21 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
   flushAssetNotes: () => {
     pendingNoteAssetId = null;
     return notesPersister.flush();
+  },
+
+  renameAsset: async (assetId, fileName) => {
+    let updated: ThermalAsset;
+    try {
+      updated = await thermalApi.renameThermalAsset(assetId, fileName);
+    } catch (e) {
+      // Tauri rejects with the backend's plain message
+      throw e instanceof Error ? e : new Error(String(e));
+    }
+    // Take only the name from the row the backend returns: a note typed
+    // moments ago may still be debounced locally and must not be rolled back
+    set((s) => ({
+      assets: s.assets.map((a) => (a.id === assetId ? { ...a, fileName: updated.fileName } : a)),
+    }));
   },
 
   clearError: () => set({ error: null }),

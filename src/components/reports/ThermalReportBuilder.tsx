@@ -10,6 +10,7 @@ import { useThermalStore } from '@/stores/thermalStore';
 import { THERMAL_HEADER_LABELS } from '@/lib/reports/common';
 import { collectOrthoExtras, readAssetDataUrl } from '@/lib/reports/extras';
 import {
+  pairDetails,
   renderThermalReport,
   type PairNote,
   type ReportImages,
@@ -205,19 +206,19 @@ export function ThermalReportBuilder({ onClose, exportComposedImage }: Props) {
       await useThermalStore.getState().flushAssetNotes();
       const current = useThermalStore.getState().assets;
       const images: ReportImages = {};
+      const find = (id: number | null) => (id == null ? null : current.find((x) => x.id === id) ?? null);
       for (const entry of report.imagingLog) {
+        const visual = find(entry.visualAssetId);
+        const thermal = find(entry.thermalAssetId);
         const notes: PairNote[] = [];
-        for (const [id, label] of [
-          [entry.visualAssetId, 'Visual note'],
-          [entry.thermalAssetId, 'Thermal note'],
-        ] as const) {
-          const a = id == null ? null : current.find((x) => x.id === id);
-          if (a) notes.push({ assetId: a.id, label, text: a.notes ?? '' });
-        }
+        if (visual) notes.push({ assetId: visual.id, label: 'Visual note', text: visual.notes ?? '' });
+        if (thermal) notes.push({ assetId: thermal.id, label: 'Thermal note', text: thermal.notes ?? '' });
         images[entry.id] = {
           thermal: await assetToDataUrl(entry.thermalAssetId),
           visual: await assetToDataUrl(entry.visualAssetId),
           notes,
+          // Picture names as they read in the library (renames included)
+          details: pairDetails(visual, thermal),
         };
       }
       return { images, extras: await collectOrthoExtras(report.orthoAssetId, current) };

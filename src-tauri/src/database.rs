@@ -2838,6 +2838,16 @@ impl Database {
         Ok(())
     }
 
+    /// Update the display name of a thermal asset (the stored path is untouched).
+    pub fn update_thermal_asset_file_name(&self, id: i64, file_name: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE thermal_assets SET file_name = ? WHERE id = ?",
+            params![file_name, id],
+        )?;
+        Ok(())
+    }
+
     /// Get the annotations JSON for an asset (None if no annotations saved).
     pub fn get_thermal_annotations(&self, asset_id: i64) -> Result<Option<String>, DatabaseError> {
         let conn = self.conn.lock().unwrap();

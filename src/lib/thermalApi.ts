@@ -87,6 +87,12 @@ export async function updateThermalAssetNotes(
   await inv('thermal_update_asset_notes', { assetId, notes });
 }
 
+/** Rename an asset's display name (listed in the libraries, printed in reports).
+ *  The backend keeps the extension and rejects empty or path-like names. */
+export async function renameThermalAsset(assetId: number, fileName: string): Promise<ThermalAsset> {
+  return inv<ThermalAsset>('thermal_rename_asset', { assetId, fileName });
+}
+
 function toArrayBuffer(res: ArrayBuffer | Uint8Array | number[]): ArrayBuffer {
   if (res instanceof ArrayBuffer) return res;
   if (res instanceof Uint8Array) {

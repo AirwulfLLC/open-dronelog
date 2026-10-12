@@ -1747,6 +1747,7 @@
                 crate::thermal::commands::thermal_list_assets,
                 crate::thermal::commands::thermal_delete_asset,
                 crate::thermal::commands::thermal_update_asset_notes,
+                crate::thermal::commands::thermal_rename_asset,
                 crate::thermal::commands::thermal_read_asset_file,
                 crate::thermal::commands::thermal_read_asset_preview,
                 crate::thermal::bundle::thermal_export_bundle,

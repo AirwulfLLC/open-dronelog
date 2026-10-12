@@ -214,8 +214,9 @@ export class DocxWriter implements ReportWriter {
         width: { size: 100, type: this.d.WidthType.PERCENTAGE },
         rows: [new this.d.TableRow({ children: [cell(spec.leftLabel, spec.leftImage), cell(spec.rightLabel, spec.rightImage)] })],
       }),
-      new this.d.Paragraph({ spacing: { after: 60 }, children: [] }),
     );
+    if (spec.details?.trim()) this.smallText(spec.details);
+    this.children.push(new this.d.Paragraph({ spacing: { after: 60 }, children: [] }));
   }
 
   notes(notes: NoteSpec[]): void {

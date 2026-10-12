@@ -164,6 +164,7 @@ export class RtfWriter implements ReportWriter {
       `{\\pard\\sa60\\fs18\\cf3 ${rtfEscape(spec.leftLabel)}\\tab\\tab ${rtfEscape(spec.rightLabel)}\\par}`,
     );
     this.parts.push(`{\\pard\\sa120 ${left} ${right}\\par}`);
+    if (spec.details?.trim()) this.smallText(spec.details);
   }
 
   notes(notes: NoteSpec[]): void {
