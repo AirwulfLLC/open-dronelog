@@ -151,6 +151,11 @@ undo, clear, and Delete-key removal. Colors come from preset swatches or a
 recent custom colors are kept as extra swatches). Annotations persist per
 asset in the profile database and are baked into report exports.
 
+**📝 Note** attaches a free-text note to the selected picture (any library).
+It is printed under the picture wherever it appears in a report — under a
+thermal imaging pair or a survey figure — and can also be edited in the
+report preview.
+
 ### Photogrammetry tab (report imagery)
 
 The **Photogrammetry** dashboard tab assembles the imagery of a photogrammetry
@@ -275,8 +280,14 @@ kind's module under `src/lib/reports/`.
 8. **Conclusions & Recommendations** — narrative plus the severity summary.
 
 Reports are saved per profile and export as **PDF** (A4, paginated, with
-embedded images and tables) or **RTF** (opens in Word/LibreOffice, images
-embedded). **Export Bundle** works for both kinds.
+embedded images and tables), **Word (.docx)** or **RTF** — all three come
+from one renderer per report kind, so they carry the same content. **Preview
+& edit** opens the report as it will export: the *Edit* tab is an editable
+rendition where any report text (header fields, summaries, captions, LRF
+data, findings, recommendations, action plan, picture notes…) can be changed
+in place and flows straight back into the report; the *PDF* tab shows the
+actual PDF of the current state. Exports can be started from the preview.
+**Export Bundle** works for both kinds.
 
 ## Testing with DJI sample data
 

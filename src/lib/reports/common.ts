@@ -1,16 +1,15 @@
 /**
  * Pieces shared by every report kind: value formatting, the sections both
  * kinds contain (header data, flight operations, orthomosaic, imagery
- * figures) rendered for PDF and RTF, and the save-to-file helper.
+ * figures) written against the ReportWriter interface, and the save helper.
  *
  * A section lives here once it is used by more than one report kind;
- * kind-specific sections stay in that kind's builder module.
+ * kind-specific sections stay in that kind's module.
  */
 
-import type { FlightSnapshot, ReportBase } from '@/types/thermal';
+import type { FlightSnapshot, PhotogrammetryEntry, ReportBase } from '@/types/thermal';
 import type { PhotogrammetryFigure } from '@/lib/photogrammetryExport';
-import { PdfWriter } from './pdfWriter';
-import { RtfWriter, fitTwips } from './rtfWriter';
+import type { EditRef, ReportWriter } from './writer';
 
 declare const __APP_VERSION__: string;
 
@@ -68,6 +67,12 @@ export function prioritySummary(severities: string[]): string {
   );
 }
 
+/** Edit reference for a top-level or nested report field. */
+export const edit = (path: string, single = false): EditRef => ({ path, single });
+
+/** Edit reference for a per-picture note (routed to the asset, not the report). */
+export const assetNoteEdit = (assetId: number): EditRef => ({ path: `assetNote.${assetId}` });
+
 // ---------------------------------------------------------------------------
 // Shared section: header data
 // ---------------------------------------------------------------------------
@@ -94,23 +99,20 @@ export const PHOTOGRAMMETRY_HEADER_LABELS: HeaderLabels = {
   person: 'Pilot / Operator',
 };
 
-export function pdfHeaderData(w: PdfWriter, r: ReportBase, labels: HeaderLabels, extraRows: Array<[string, string]> = []): void {
+export function headerData(
+  w: ReportWriter,
+  r: ReportBase,
+  labels: HeaderLabels,
+  extraRows: Array<[key: string, value: string, edit?: EditRef]> = [],
+): void {
   w.sectionHeading('Header Data');
-  for (const [k, v] of extraRows) w.kv(k, v);
-  w.kv(labels.address, r.propertyAddress);
+  for (const [k, v, e] of extraRows) w.kv(k, v, e);
+  w.kv(labels.address, r.propertyAddress, edit('propertyAddress', true));
+  // The date is an ISO value behind a date picker — free text would break it
   w.kv(labels.date, r.inspectionDate);
-  w.kv(labels.weather, r.weatherConditions);
-  w.kv(labels.person, r.inspectorName);
-  w.y += 3;
-}
-
-export function rtfHeaderData(w: RtfWriter, r: ReportBase, labels: HeaderLabels, extraRows: Array<[string, string]> = []): void {
-  w.sectionHeading('Header Data');
-  for (const [k, v] of extraRows) w.kv(k, v);
-  w.kv(labels.address, r.propertyAddress);
-  w.kv(labels.date, r.inspectionDate);
-  w.kv(labels.weather, r.weatherConditions);
-  w.kv(labels.person, r.inspectorName);
+  w.kv(labels.weather, r.weatherConditions, edit('weatherConditions', true));
+  w.kv(labels.person, r.inspectorName, edit('inspectorName', true));
+  w.space(3);
 }
 
 // ---------------------------------------------------------------------------
@@ -132,32 +134,13 @@ function flightDetails(f: FlightSnapshot): string {
     .join('  ·  ');
 }
 
-export function pdfFlightOperations(w: PdfWriter, flights: FlightSnapshot[]): void {
+export function flightOperations(w: ReportWriter, flights: FlightSnapshot[]): void {
   if (flights.length === 0) return;
   w.sectionHeading('Flight Operations (DJI)');
   for (const f of flights) {
-    w.checkPage(14);
     w.subheading(f.displayName || `Flight ${f.id}`);
-    w.lines(flightDetails(f), 8.5, 4.2);
-    w.y += 3;
-  }
-}
-
-export function rtfFlightOperations(w: RtfWriter, flights: FlightSnapshot[]): void {
-  if (flights.length === 0) return;
-  w.sectionHeading('Flight Operations (DJI)');
-  for (const f of flights) {
-    w.sub(f.displayName || `Flight ${f.id}`);
-    if (f.startTime) w.kv('Date', f.startTime);
-    if (f.droneModel) w.kv('Drone', `${f.droneModel}${f.aircraftName ? ` (${f.aircraftName})` : ''}`);
-    w.kv('Duration', fmtDuration(f.durationSecs));
-    w.kv('Distance', fmtMeters(f.totalDistance));
-    if (f.maxAltitude != null) w.kv('Max altitude', `${f.maxAltitude.toFixed(0)} m`);
-    if (f.maxSpeed != null) w.kv('Max speed', `${f.maxSpeed.toFixed(1)} m/s`);
-    if (f.homeLat != null && f.homeLon != null) {
-      w.kv('Home position', `${f.homeLat.toFixed(6)}, ${f.homeLon.toFixed(6)}`);
-    }
-    if (f.photoCount != null) w.kv('Photos', String(f.photoCount));
+    w.detail(flightDetails(f));
+    w.space(3);
   }
 }
 
@@ -180,85 +163,46 @@ export function hasOrthoContent(extras: OrthoExtras, link: string): boolean {
 }
 
 /** Body only (the caller emits the heading, since its title differs per kind). */
-export function pdfOrthoBody(w: PdfWriter, extras: OrthoExtras, link: string): void {
+export function orthoBody(w: ReportWriter, extras: OrthoExtras, link: string): void {
   if (extras.orthoDataUrl) {
-    const aspect = extras.orthoAspect && extras.orthoAspect > 0 ? extras.orthoAspect : 0.66;
-    let imgW = w.contentW;
-    let imgH = imgW * aspect;
-    const maxH = w.pageH - w.margin * 2 - 24;
-    if (imgH > maxH) {
-      imgH = maxH;
-      imgW = imgH / aspect;
-    }
-    w.checkPage(imgH + 14);
-    const x = w.margin + (w.contentW - imgW) / 2;
-    if (w.image(extras.orthoDataUrl, x, w.y, imgW, imgH)) w.y += imgH + 3;
-    if (extras.orthoLabel) {
-      w.checkPage(5);
-      w.gray(extras.orthoLabel);
-      w.y += 2;
-    }
+    // Unnumbered and allowed the full page height: it is the main deliverable
+    w.figure({
+      image: extras.orthoDataUrl,
+      aspect: extras.orthoAspect && extras.orthoAspect > 0 ? extras.orthoAspect : 0.66,
+      maxHeightMm: 240,
+      caption: '',
+      details: extras.orthoLabel ?? '',
+    });
   }
-  if (link.trim()) w.link(link);
-}
-
-export function rtfOrthoBody(w: RtfWriter, extras: OrthoExtras, link: string): void {
-  if (extras.orthoDataUrl) {
-    // ~16cm wide (9072 twips), height per the true aspect ratio capped at ~23cm
-    const { w: wTw, h: hTw } = fitTwips(extras.orthoAspect ?? 0.66, 9072, 12960);
-    w.pict(extras.orthoDataUrl, wTw, hTw);
-    if (extras.orthoLabel) w.gray(extras.orthoLabel);
-  }
-  if (link.trim()) w.para(link);
+  if (link.trim() || w.editable) w.link(link, edit('orthomosaicLink', true));
 }
 
 // ---------------------------------------------------------------------------
 // Shared section: imagery figures (annotated photos / video frames)
 // ---------------------------------------------------------------------------
 
-/** Tallest a figure may be (mm) — two 4:3 figures per A4 page. */
-const FIGURE_MAX_H_MM = 92;
-
-export function pdfFigures(w: PdfWriter, figures: PhotogrammetryFigure[], title: string): void {
-  if (figures.length === 0) return;
+/** Figures in queue order. Captions come from the report entries (so edits
+ *  made in the preview show up) and images from the prepared figures. */
+export function figuresSection(
+  w: ReportWriter,
+  title: string,
+  entries: PhotogrammetryEntry[],
+  figures: PhotogrammetryFigure[],
+): void {
+  if (entries.length === 0) return;
   w.sectionHeading(title);
-  figures.forEach((fig, i) => {
-    const aspect = fig.aspect > 0 ? fig.aspect : 0.75;
-    let imgW = w.contentW;
-    let imgH = imgW * aspect;
-    if (imgH > FIGURE_MAX_H_MM) {
-      imgH = FIGURE_MAX_H_MM;
-      imgW = imgH / aspect;
-    }
-    const caption = `Figure ${i + 1}. ${fig.caption.trim() || 'Untitled'}`;
-    // Measure in the font subheading() will draw with (bold 10pt), not whatever
-    // the previous helper left selected
-    const captionLines = w.lineCount(caption, 10, true);
-    w.checkPage(imgH + 13 + captionLines * 5);
-    w.subheading(caption);
-    const x = w.margin + (w.contentW - imgW) / 2;
-    if (!fig.dataUrl || !w.image(fig.dataUrl, x, w.y, imgW, imgH)) {
-      w.placeholder(x, w.y, imgW, imgH, 'Image unavailable');
-    }
-    w.y += imgH + 3;
-    w.gray(fig.details);
-    w.y += 5;
-  });
-}
-
-export function rtfFigures(w: RtfWriter, figures: PhotogrammetryFigure[], title: string): void {
-  if (figures.length === 0) return;
-  w.sectionHeading(title);
-  figures.forEach((fig, i) => {
-    w.sub(`Figure ${i + 1}. ${fig.caption.trim() || 'Untitled'}`);
-    if (fig.dataUrl) {
-      // ~16cm wide, capped at ~12cm tall
-      const { w: wTw, h: hTw } = fitTwips(fig.aspect, 9072, 6800);
-      w.pict(fig.dataUrl, wTw, hTw);
-    } else {
-      w.para('(image unavailable)');
-    }
-    w.gray(fig.details);
+  entries.forEach((entry, i) => {
+    const fig = figures.find((f) => f.entryId === entry.id);
+    w.figure({
+      index: i + 1,
+      image: fig?.dataUrl ?? null,
+      aspect: fig?.aspect ?? 0.75,
+      caption: entry.caption,
+      captionEdit: edit(`figures.${i}.caption`, true),
+      details: fig?.details ?? '',
+      note: fig?.note ?? null,
+      noteEdit: fig?.assetId != null ? assetNoteEdit(fig.assetId) : undefined,
+    });
   });
 }
 
@@ -272,6 +216,7 @@ export async function saveReportFile(
   content: Uint8Array | string,
   filterName: string,
   extension: string,
+  mime = 'application/octet-stream',
 ): Promise<boolean> {
   const isWeb = import.meta.env.VITE_BACKEND === 'web';
   if (!isWeb) {
@@ -294,10 +239,7 @@ export async function saveReportFile(
     }
   }
   // Browser fallback
-  const blob =
-    typeof content === 'string'
-      ? new Blob([content], { type: 'application/rtf' })
-      : new Blob([content as BlobPart], { type: 'application/pdf' });
+  const blob = new Blob([content as BlobPart], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

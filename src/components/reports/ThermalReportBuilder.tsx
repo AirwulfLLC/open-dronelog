@@ -1,8 +1,8 @@
 /**
- * Thermal inspection report workflow: sections, export composition and the
+ * Thermal inspection report workflow: sections, export-time content and the
  * report-kind hooks for the shared shell. To add a component to this report,
- * add a field to ThermalReport, a section definition below, and its renderer
- * in src/lib/reports/thermalReport.ts.
+ * add a field to ThermalReport, a section definition below, and render it in
+ * src/lib/reports/thermalReport.ts.
  */
 
 import React, { useCallback } from 'react';
@@ -10,12 +10,13 @@ import { useThermalStore } from '@/stores/thermalStore';
 import { THERMAL_HEADER_LABELS } from '@/lib/reports/common';
 import { collectOrthoExtras, readAssetDataUrl } from '@/lib/reports/extras';
 import {
-  buildThermalReportPdf,
-  buildThermalReportRtf,
+  renderThermalReport,
+  type PairNote,
   type ReportImages,
+  type ThermalPrepared,
 } from '@/lib/reports/thermalReport';
 import { EMPTY_THERMAL_REPORT, type ThermalReport } from '@/types/thermal';
-import { ReportShell } from './ReportShell';
+import { ReportShell, type PreviewEditResult } from './ReportShell';
 import { HeaderSection } from './sections/HeaderSection';
 import { FlightDataSection } from './sections/FlightDataSection';
 import { OrthomosaicSection } from './sections/OrthomosaicSection';
@@ -80,6 +81,16 @@ function legacyFiguresNotice(parsed: Record<string, unknown>): string | void {
   );
 }
 
+const ASSET_NOTE_PREFIX = 'assetNote.';
+
+/** Preview edits of picture notes go to the asset, not the report document. */
+export function routeAssetNoteEdit(path: string, value: string): PreviewEditResult {
+  if (!path.startsWith(ASSET_NOTE_PREFIX)) return { handled: false };
+  const id = Number(path.slice(ASSET_NOTE_PREFIX.length));
+  if (Number.isFinite(id)) useThermalStore.getState().setAssetNotes(id, value);
+  return { handled: true, invalidatesPrepared: true };
+}
+
 interface Props {
   onClose: () => void;
   /** Thermal Studio's live composed view (palette + annotations) of the selected asset. */
@@ -112,38 +123,30 @@ export function ThermalReportBuilder({ onClose, exportComposedImage }: Props) {
     [assets, selectedAssetId, exportComposedImage, annotations],
   );
 
-  const collectImages = useCallback(
-    async (report: ThermalReport): Promise<ReportImages> => {
+  const prepare = useCallback(
+    async (report: ThermalReport): Promise<ThermalPrepared> => {
+      // Notes typed moments ago must be in the list we read from
+      await useThermalStore.getState().flushAssetNotes();
+      const current = useThermalStore.getState().assets;
       const images: ReportImages = {};
       for (const entry of report.imagingLog) {
+        const notes: PairNote[] = [];
+        for (const [id, label] of [
+          [entry.visualAssetId, 'Visual note'],
+          [entry.thermalAssetId, 'Thermal note'],
+        ] as const) {
+          const a = id == null ? null : current.find((x) => x.id === id);
+          if (a) notes.push({ assetId: a.id, label, text: a.notes ?? '' });
+        }
         images[entry.id] = {
           thermal: await assetToDataUrl(entry.thermalAssetId),
           visual: await assetToDataUrl(entry.visualAssetId),
+          notes,
         };
       }
-      return images;
+      return { images, extras: await collectOrthoExtras(report.orthoAssetId, current) };
     },
     [assetToDataUrl],
-  );
-
-  const buildPdf = useCallback(
-    async (report: ThermalReport) =>
-      buildThermalReportPdf(
-        report,
-        await collectImages(report),
-        await collectOrthoExtras(report.orthoAssetId, assets),
-      ),
-    [collectImages, assets],
-  );
-
-  const buildRtf = useCallback(
-    async (report: ThermalReport) =>
-      buildThermalReportRtf(
-        report,
-        await collectImages(report),
-        await collectOrthoExtras(report.orthoAssetId, assets),
-      ),
-    [collectImages, assets],
   );
 
   const referencedAssetIds = useCallback(
@@ -168,7 +171,7 @@ export function ThermalReportBuilder({ onClose, exportComposedImage }: Props) {
   );
 
   return (
-    <ReportShell<ThermalReport>
+    <ReportShell<ThermalReport, ThermalPrepared>
       kind="thermal"
       title="Thermal Inspection Report"
       icon="🌡️"
@@ -179,8 +182,9 @@ export function ThermalReportBuilder({ onClose, exportComposedImage }: Props) {
       onLoaded={legacyFiguresNotice}
       serialize={(r) => r}
       referencedAssetIds={referencedAssetIds}
-      buildPdf={buildPdf}
-      buildRtf={buildRtf}
+      prepare={prepare}
+      render={renderThermalReport}
+      onPreviewEdit={routeAssetNoteEdit}
       onClose={onClose}
     />
   );

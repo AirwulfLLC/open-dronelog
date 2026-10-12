@@ -68,6 +68,7 @@ export function PhotogrammetryStudio() {
   const allAssets = useThermalStore((s) => s.assets);
   const assetsLoaded = useThermalStore((s) => s.assetsLoaded);
   const loadAssets = useThermalStore((s) => s.loadAssets);
+  const setAssetNotes = useThermalStore((s) => s.setAssetNotes);
   const {
     selectedAssetId,
     assetUrl,
@@ -105,6 +106,7 @@ export function PhotogrammetryStudio() {
   const [notice, setNotice] = useState<string | null>(null);
   const [showReportBuilder, setShowReportBuilder] = useState(false);
   const [reportMenuOpen, setReportMenuOpen] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
   const reportMenuRef = useRef<HTMLDivElement>(null);
   const videoTimeRef = useRef(0);
   // Pointer-driven queue reorder. HTML5 drag-and-drop is deliberately not
@@ -384,7 +386,7 @@ export function PhotogrammetryStudio() {
             disabled={isImporting}
             className="px-3 py-1.5 rounded-lg bg-drone-primary hover:bg-drone-primary/80 text-white text-xs font-medium disabled:opacity-50"
           >
-            {isImporting ? 'Importing…' : '+ Import photos / videos / Metashape'}
+            {isImporting ? 'Importing…' : '+ Import photos / videos'}
           </button>
           <button
             onClick={handleAddToReport}
@@ -421,9 +423,9 @@ export function PhotogrammetryStudio() {
                   Open report builder…
                 </button>
                 <div className="px-3 py-1.5 text-[10px] text-gray-500 border-t border-gray-700 mt-1">
-                  Build a photogrammetry survey report (PDF/RTF): scope, flights,
+                  Build a photogrammetry survey report (PDF, Word, RTF): scope, flights,
                   Metashape outputs, the queued figures in the order shown on the right,
-                  findings and conclusions.
+                  findings and conclusions — preview and edit the text before exporting.
                 </div>
               </div>
             )}
@@ -560,11 +562,37 @@ export function PhotogrammetryStudio() {
                 >
                   ✕ Clear
                 </button>
+                <div className="w-px h-5 bg-gray-700 mx-1" />
+                <button
+                  onClick={() => setNoteOpen((o) => !o)}
+                  className={`px-2 py-1 rounded text-xs border transition-colors ${
+                    noteOpen || selectedAsset.notes
+                      ? 'bg-amber-500/15 border-amber-500/60 text-amber-200'
+                      : 'border-transparent text-gray-400 hover:text-white'
+                  }`}
+                  title="Note for this picture — printed under its figure in the report"
+                >
+                  📝 Note{selectedAsset.notes ? ' ●' : ''}
+                </button>
                 <span className="ml-auto text-[10px] text-gray-500">
                   {annotations.length} annotation{annotations.length === 1 ? '' : 's'} · saved with the
                   image and drawn into the report
                 </span>
               </div>
+
+              {noteOpen && (
+                <div className="px-3 py-2 border-b border-gray-700 bg-amber-500/5">
+                  <label className="block text-[10px] text-gray-400 mb-1">
+                    Note for this picture — appears under its figure in the report
+                  </label>
+                  <textarea
+                    value={selectedAsset.notes ?? ''}
+                    onChange={(e) => setAssetNotes(selectedAsset.id, e.target.value)}
+                    placeholder="Observed condition, context, measurements, follow-up…"
+                    className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-white placeholder-gray-500 focus:outline-none focus:border-amber-400 min-h-[56px]"
+                  />
+                </div>
+              )}
 
               <PhotoViewer
                 key={selectedAsset.id}
@@ -607,7 +635,7 @@ export function PhotogrammetryStudio() {
                   onClick={openFileDialog}
                   className="mt-2 px-4 py-2 rounded-lg bg-drone-primary hover:bg-drone-primary/80 text-white text-sm font-medium"
                 >
-                  Import photos / videos / Metashape
+                  Import photos / videos
                 </button>
               </div>
             </div>
@@ -652,14 +680,6 @@ export function PhotogrammetryStudio() {
                 onHandleMouseDown={() => setDragState({ id: entry.id, overIndex: null })}
               />
             ))}
-          </div>
-          <div className="p-2 border-t border-gray-700">
-            <button
-              onClick={() => setShowReportBuilder(true)}
-              className="w-full py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium"
-            >
-              Open report builder
-            </button>
           </div>
         </aside>
       </div>

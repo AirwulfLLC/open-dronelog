@@ -205,6 +205,7 @@ export const usePhotogrammetryStore = create<PhotogrammetryState>((set, get) => 
       // Persist the outgoing asset's debounced edits (the payload carries its
       // own assetId, so this stays correct after the state switches).
       void annotationsPersister.flush();
+      void useThermalStore.getState().flushAssetNotes();
       set({ selectedAssetId: assetId, annotations: [], assetUrl: null, error: null, isLoadingAsset: false });
       if (assetId == null) {
         replaceObjectUrl(null, '');

@@ -1,108 +1,84 @@
 /**
- * Thermal inspection report export (PDF + RTF).
+ * Thermal inspection report, rendered once against ReportWriter (PDF, Word,
+ * RTF and the editable preview all come from this).
  *
  * Sections: Header Data · Summary · Flight Operations · Orthomosaic ·
  * Thermal Imaging Log & Comparative Matrix · Thermal Anomaly Log · Action
- * Plan & Repair Prioritization. Shared sections come from ./common; the
- * imaging log and anomaly log are specific to this kind.
+ * Plan & Repair Prioritization.
  */
 
 import { CLASSIFICATION_LABELS } from '@/types/thermal';
-import type { ReportImageEntry, ThermalReport } from '@/types/thermal';
-import { createPdfWriter } from './pdfWriter';
-import { RtfWriter, dataUrlToRtfPict } from './rtfWriter';
+import type { ThermalReport } from '@/types/thermal';
 import {
   SEVERITY_LABELS,
   THERMAL_HEADER_LABELS,
+  assetNoteEdit,
+  edit,
+  flightOperations,
   fmtGps,
   fmtTemp,
   generatedBy,
   hasOrthoContent,
-  pdfFlightOperations,
-  pdfHeaderData,
-  pdfOrthoBody,
+  headerData,
+  orthoBody,
   prioritySummary,
-  rtfFlightOperations,
-  rtfHeaderData,
-  rtfOrthoBody,
   type OrthoExtras,
 } from './common';
+import type { ReportWriter } from './writer';
 
-export interface ReportImages {
-  /** entry.id → { thermal, visual } data URLs (PNG/JPEG) */
-  [entryId: string]: { thermal: string | null; visual: string | null };
+/** A per-picture note attached to one of the pair's assets. */
+export interface PairNote {
+  assetId: number;
+  label: string;
+  text: string;
 }
 
-export type ThermalReportExtras = OrthoExtras;
+export interface ReportImages {
+  /** entry.id → data URLs (PNG/JPEG) and the pictures' notes */
+  [entryId: string]: { thermal: string | null; visual: string | null; notes: PairNote[] };
+}
 
-const SUBTITLE = generatedBy('DJI Thermal SDK');
+export interface ThermalPrepared {
+  images: ReportImages;
+  extras: OrthoExtras;
+}
 
-export async function buildThermalReportPdf(
-  report: ThermalReport,
-  images: ReportImages,
-  extras: ThermalReportExtras = {},
-): Promise<Uint8Array> {
-  const w = await createPdfWriter();
-  const { doc } = w;
+export function renderThermalReport(w: ReportWriter, report: ThermalReport, p: ThermalPrepared): void {
+  w.title('Thermal Inspection Report', generatedBy('DJI Thermal SDK'));
+  headerData(w, report, THERMAL_HEADER_LABELS);
 
-  w.title('Thermal Inspection Report', SUBTITLE);
-  pdfHeaderData(w, report, THERMAL_HEADER_LABELS);
-
-  if (report.summary.trim()) {
+  if (report.summary.trim() || w.editable) {
     w.sectionHeading('Summary');
-    w.paragraph(report.summary);
+    w.paragraph(report.summary, { edit: edit('summary'), hint: 'Scope, methodology and overall condition summary…' });
   }
 
-  pdfFlightOperations(w, report.linkedFlights ?? []);
+  flightOperations(w, report.linkedFlights ?? []);
 
-  if (hasOrthoContent(extras, report.orthomosaicLink)) {
+  if (hasOrthoContent(p.extras, report.orthomosaicLink) || w.editable) {
     w.sectionHeading('Orthomosaic (Agisoft Metashape)');
-    pdfOrthoBody(w, extras, report.orthomosaicLink);
+    orthoBody(w, p.extras, report.orthomosaicLink);
   }
 
   // ---- Imaging log / comparative matrix ----
   w.sectionHeading('Thermal Imaging Log & Comparative Matrix');
-  if (report.imagingLog.length === 0) {
-    w.paragraph('No imaging entries.');
-  }
-  for (let i = 0; i < report.imagingLog.length; i++) {
-    const entry = report.imagingLog[i];
-    const imgPair = images[entry.id] ?? { thermal: null, visual: null };
-    const colW = (w.contentW - 6) / 2;
-    const imgH = colW * 0.75;
-
-    const pairTitle = `${i + 1}. ${entry.caption || 'Imaging pair'}`;
-    w.checkPage(imgH + 21 + w.lineCount(pairTitle, 10, true) * 5);
-    w.subheading(pairTitle);
-
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(110, 110, 110);
-    doc.text('Visual (Zoom/Wide)', w.margin, w.y);
-    doc.text('Thermal (Infrared)', w.margin + colW + 6, w.y);
-    doc.setTextColor(0, 0, 0);
-    w.y += 2;
-
-    const drawImg = (dataUrl: string | null, x: number) => {
-      if (!dataUrl || !w.image(dataUrl, x, w.y, colW, imgH)) {
-        w.placeholder(x, w.y, colW, imgH, 'No image');
-      }
-    };
-    drawImg(imgPair.visual, w.margin);
-    drawImg(imgPair.thermal, w.margin + colW + 6);
-    w.y += imgH + 4;
-
-    if (entry.lrfData.trim()) {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8);
-      doc.text('LRF / Range Data: ', w.margin, w.y);
-      doc.setFont('helvetica', 'normal');
-      const lines = doc.splitTextToSize(entry.lrfData, w.contentW - 30) as string[];
-      doc.text(lines, w.margin + 30, w.y);
-      w.y += Math.max(4, lines.length * 4);
+  if (report.imagingLog.length === 0) w.paragraph('No imaging entries.');
+  report.imagingLog.forEach((entry, i) => {
+    const pair = p.images[entry.id] ?? { thermal: null, visual: null, notes: [] };
+    w.imagePair({
+      index: i + 1,
+      caption: entry.caption,
+      captionEdit: edit(`imagingLog.${i}.caption`, true),
+      leftLabel: 'Visual (Zoom/Wide)',
+      leftImage: pair.visual,
+      rightLabel: 'Thermal (Infrared)',
+      rightImage: pair.thermal,
+    });
+    if (entry.lrfData.trim() || w.editable) {
+      w.kv('LRF / Range Data', entry.lrfData, edit(`imagingLog.${i}.lrfData`, true), { compact: true });
     }
-    w.y += 4;
-  }
+    w.notes(pair.notes.map((n) => ({ label: n.label, text: n.text, edit: assetNoteEdit(n.assetId) })));
+    w.space(4);
+  });
 
   // ---- Anomaly log ----
   w.sectionHeading('Thermal Anomaly Log');
@@ -132,100 +108,27 @@ export async function buildThermalReportPdf(
         CLASSIFICATION_LABELS[a.classification] ?? a.classification,
       ]),
     );
-
-    // Findings detail
-    for (const a of report.anomalies) {
-      if (!a.finding.trim() && !a.recommendation.trim()) continue;
-      w.checkPage(14);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text(`${a.refId} — Finding`, w.margin, w.y);
-      w.y += 4.5;
-      if (a.finding.trim()) w.paragraph(a.finding, 9);
-      if (a.recommendation.trim()) {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        w.checkPage(6);
-        doc.text('Recommendation:', w.margin, w.y);
-        w.y += 4.5;
-        w.paragraph(a.recommendation, 9);
+    report.anomalies.forEach((a, i) => {
+      if (!a.finding.trim() && !a.recommendation.trim() && !w.editable) return;
+      w.boldLine(`${a.refId} — Finding`);
+      w.paragraph(a.finding, { edit: edit(`anomalies.${i}.finding`), hint: 'Describe the finding…', size: 9 });
+      if (a.recommendation.trim() || w.editable) {
+        w.boldLine('Recommendation:');
+        w.paragraph(a.recommendation, {
+          edit: edit(`anomalies.${i}.recommendation`),
+          hint: 'Recommended corrective action…',
+          size: 9,
+        });
       }
-    }
+    });
   }
 
   // ---- Action plan ----
   w.sectionHeading('Action Plan & Repair Prioritization');
-  w.paragraph(report.actionPlan.trim() || 'No action plan recorded.');
+  w.paragraph(report.actionPlan, { edit: edit('actionPlan'), placeholder: 'No action plan recorded.' });
   if (report.anomalies.length > 0) {
-    w.paragraph(prioritySummary(report.anomalies.map((a) => a.severity)), 9);
+    w.paragraph(prioritySummary(report.anomalies.map((a) => a.severity)), { size: 9 });
   }
 
   w.footers(report.propertyAddress);
-  return w.bytes();
-}
-
-export function buildThermalReportRtf(
-  report: ThermalReport,
-  images: ReportImages,
-  extras: ThermalReportExtras = {},
-): string {
-  const w = new RtfWriter();
-  w.title('Thermal Inspection Report', SUBTITLE);
-  rtfHeaderData(w, report, THERMAL_HEADER_LABELS);
-
-  if (report.summary.trim()) {
-    w.sectionHeading('Summary');
-    w.para(report.summary);
-  }
-
-  rtfFlightOperations(w, report.linkedFlights ?? []);
-
-  if (hasOrthoContent(extras, report.orthomosaicLink)) {
-    w.sectionHeading('Orthomosaic (Agisoft Metashape)');
-    rtfOrthoBody(w, extras, report.orthomosaicLink);
-  }
-
-  w.sectionHeading('Thermal Imaging Log & Comparative Matrix');
-  if (report.imagingLog.length === 0) w.para('No imaging entries.');
-  report.imagingLog.forEach((entry: ReportImageEntry, i: number) => {
-    w.sub(`${i + 1}. ${entry.caption || 'Imaging pair'}`);
-    const pair = images[entry.id] ?? { thermal: null, visual: null };
-    // ~7.5cm wide each (4252 twips), 4:3
-    const pw = 4252;
-    const ph = 3189;
-    const visual = pair.visual ? dataUrlToRtfPict(pair.visual, pw, ph) : '(no visual image)';
-    const thermal = pair.thermal ? dataUrlToRtfPict(pair.thermal, pw, ph) : '(no thermal image)';
-    w.raw(`{\\pard\\sa60\\fs18\\cf3 Visual (Zoom/Wide)\\tab\\tab Thermal (Infrared)\\par}`);
-    w.raw(`{\\pard\\sa120 ${visual} ${thermal}\\par}`);
-    if (entry.lrfData.trim()) {
-      w.kv('LRF / Range Data', entry.lrfData);
-    }
-  });
-
-  w.sectionHeading('Thermal Anomaly Log');
-  if (report.anomalies.length === 0) {
-    w.para('No anomalies recorded.');
-  } else {
-    for (const a of report.anomalies) {
-      w.sub(`${a.refId} — ${SEVERITY_LABELS[a.severity] ?? a.severity} severity`);
-      w.kv('Location', a.location || '—');
-      if (a.gpsLat != null) w.kv('Geotag', fmtGps(a.gpsLat, a.gpsLon));
-      w.kv(
-        'Temperatures',
-        `Tmax ${fmtTemp(a.tMax)} · Tmin ${fmtTemp(a.tMin)} · Baseline ${fmtTemp(a.baseline)}` +
-          (a.deltaT != null ? ` · ΔT ${a.deltaT > 0 ? '+' : ''}${a.deltaT.toFixed(1)} °C` : ''),
-      );
-      w.kv('Classification', CLASSIFICATION_LABELS[a.classification] ?? a.classification);
-      if (a.finding.trim()) w.kv('Finding', a.finding);
-      if (a.recommendation.trim()) w.kv('Recommendation', a.recommendation);
-    }
-  }
-
-  w.sectionHeading('Action Plan & Repair Prioritization');
-  w.para(report.actionPlan.trim() || 'No action plan recorded.');
-  if (report.anomalies.length > 0) {
-    w.para(prioritySummary(report.anomalies.map((a) => a.severity)));
-  }
-
-  return w.finish();
 }

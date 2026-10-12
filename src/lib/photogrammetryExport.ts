@@ -11,11 +11,15 @@ import type { Annotation, PhotogrammetryEntry, ThermalAsset } from '@/types/ther
 
 export interface PhotogrammetryFigure {
   entryId: string;
+  /** The pictured asset (null when it is no longer in the library). */
+  assetId: number | null;
   /** JPEG data URL, or null when the asset is missing or could not be decoded. */
   dataUrl: string | null;
   caption: string;
   /** Source line: file name, capture time, position, video frame time. */
   details: string;
+  /** The picture's note (ThermalAsset.notes) at preparation time. */
+  note: string | null;
   /** height / width of the figure. */
   aspect: number;
 }
@@ -173,9 +177,11 @@ export async function buildPhotogrammetryFigures(
     if (!asset) {
       figures.push({
         entryId: entry.id,
+        assetId: null,
         dataUrl: null,
         caption: entry.caption,
         details: 'Asset is no longer in the library',
+        note: null,
         aspect: 0.75,
       });
       continue;
@@ -188,9 +194,11 @@ export async function buildPhotogrammetryFigures(
     }
     figures.push({
       entryId: entry.id,
+      assetId: asset.id,
       dataUrl: composed?.dataUrl ?? null,
       caption: entry.caption,
       details: figureDetails(asset, entry),
+      note: asset.notes,
       aspect: composed?.aspect ?? 0.75,
     });
   }

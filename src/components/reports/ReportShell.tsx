@@ -1,20 +1,40 @@
 /**
  * ReportShell — the modal frame every report workflow shares: report name,
- * saved-report list (this kind only), Save / Export PDF / Export RTF / Export
- * Bundle, notices, and the numbered sections supplied by the workflow.
+ * saved-report list (this kind only), Save, Preview (editable), Export as
+ * PDF / Word / RTF, Export Bundle, notices, and the numbered sections
+ * supplied by the workflow.
  *
  * Kind-specific behaviour is injected: how to normalize stored JSON, what to
  * inject right before save/export (e.g. the photogrammetry queue), which
- * assets a bundle must carry, and the PDF/RTF builders.
+ * assets a bundle must carry, how to resolve export-time content (`prepare`)
+ * and how to render the document (`render`, against the ReportWriter
+ * interface — the same renderer produces every format and the preview).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as thermalApi from '@/lib/thermalApi';
 import { saveReportFile } from '@/lib/reports/common';
+import {
+  EXPORT_FORMATS,
+  renderPreviewHtml,
+  renderToFormat,
+  type ExportFormat,
+  type ReportRenderer,
+} from '@/lib/reports/export';
+import { setPath } from '@/lib/reports/editPath';
 import type { ReportBase, ReportKind, ThermalReportMeta } from '@/types/thermal';
+import { ReportPreview } from './ReportPreview';
 import type { ReportPatch, ReportSectionDef } from './types';
 
-export interface ReportShellProps<R extends ReportBase> {
+export interface PreviewEditResult {
+  /** True when the workflow routed the edit itself (nothing to set on the report). */
+  handled: boolean;
+  /** True when the edit changed content that `prepare` captured (e.g. a
+   *  picture note), so exports must prepare again. */
+  invalidatesPrepared?: boolean;
+}
+
+export interface ReportShellProps<R extends ReportBase, P> {
   kind: ReportKind;
   title: string;
   icon: string;
@@ -31,14 +51,18 @@ export interface ReportShellProps<R extends ReportBase> {
   serialize: (report: R) => R;
   /** Asset ids an inspection bundle must carry for this report. */
   referencedAssetIds: (report: R) => number[];
-  buildPdf: (report: R) => Promise<Uint8Array>;
-  buildRtf: (report: R) => Promise<string>;
+  /** Resolve export-time content (images, figures) for a serialized report. */
+  prepare: (report: R) => Promise<P>;
+  /** Render the report into any writer (file formats and the preview). */
+  render: ReportRenderer<R, P>;
+  /** Route a preview edit whose path is not a plain report field. */
+  onPreviewEdit?: (path: string, value: string) => PreviewEditResult;
   /** Hook for "+ New blank" (e.g. offer to clear a shared queue). */
   onNewBlank?: () => void;
   onClose: () => void;
 }
 
-export function ReportShell<R extends ReportBase>({
+export function ReportShell<R extends ReportBase, P>({
   kind,
   title,
   icon,
@@ -49,17 +73,24 @@ export function ReportShell<R extends ReportBase>({
   onLoaded,
   serialize,
   referencedAssetIds,
-  buildPdf,
-  buildRtf,
+  prepare,
+  render,
+  onPreviewEdit,
   onNewBlank,
   onClose,
-}: ReportShellProps<R>) {
+}: ReportShellProps<R, P>) {
   const [report, setReport] = useState<R>(empty);
   const [reportName, setReportName] = useState(defaultName);
   const [reportId, setReportId] = useState<number | null>(null);
   const [savedReports, setSavedReports] = useState<ThermalReportMeta[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  /** Open preview: its HTML and the prepared content it was rendered from. */
+  const [preview, setPreview] = useState<{ html: string; prepared: P } | null>(null);
+  // Set when a preview edit changed content that `prepare` captured
+  const preparedStaleRef = useRef(false);
 
   const refreshSavedReports = useCallback(async () => {
     try {
@@ -74,6 +105,16 @@ export function ReportShell<R extends ReportBase>({
   useEffect(() => {
     refreshSavedReports();
   }, [refreshSavedReports]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   const update = useCallback(
     (patch: ReportPatch<R>) => setReport((r) => ({ ...r, ...patch })),
@@ -138,33 +179,64 @@ export function ReportShell<R extends ReportBase>({
     setReportName(defaultName);
   };
 
-  const handleExportPdf = async () => {
-    setBusy('pdf');
+  /** Export-time content: reuse the open preview's unless an edit invalidated it. */
+  const preparedFor = async (full: R): Promise<P> => {
+    if (preview && !preparedStaleRef.current) return preview.prepared;
+    const prepared = await prepare(full);
+    preparedStaleRef.current = false;
+    if (preview) setPreview((p) => (p ? { ...p, prepared } : p));
+    return prepared;
+  };
+
+  const handleExport = async (format: ExportFormat) => {
+    setExportMenuOpen(false);
+    setBusy(format);
     try {
-      const pdf = await buildPdf(serialize(report));
-      const ok = await saveReportFile(`${safeName()}.pdf`, pdf, 'PDF Report', 'pdf');
-      if (ok) setNotice('PDF exported.');
+      const full = serialize(report);
+      const prepared = await preparedFor(full);
+      const out = await renderToFormat(format, render, full, prepared);
+      const info = EXPORT_FORMATS[format];
+      const ok = await saveReportFile(`${safeName()}.${info.ext}`, out, info.filter, info.ext, info.mime);
+      if (ok) setNotice(`${info.label} exported.`);
     } catch (e) {
-      setNotice(`PDF export failed: ${e instanceof Error ? e.message : e}`);
+      setNotice(`${EXPORT_FORMATS[format].label} export failed: ${e instanceof Error ? e.message : e}`);
     } finally {
       setBusy(null);
     }
   };
 
-  const handleExportRtf = async () => {
-    setBusy('rtf');
+  const handlePreview = async () => {
+    setBusy('preview');
     try {
-      const rtf = await buildRtf(serialize(report));
-      const ok = await saveReportFile(`${safeName()}.rtf`, rtf, 'RTF Report', 'rtf');
-      if (ok) setNotice('RTF exported.');
+      const full = serialize(report);
+      const prepared = await prepare(full);
+      preparedStaleRef.current = false;
+      setPreview({ html: renderPreviewHtml(render, full, prepared), prepared });
     } catch (e) {
-      setNotice(`RTF export failed: ${e instanceof Error ? e.message : e}`);
+      setNotice(`Preview failed: ${e instanceof Error ? e.message : e}`);
     } finally {
       setBusy(null);
     }
+  };
+
+  const handlePreviewEdit = (path: string, value: string) => {
+    const result = onPreviewEdit?.(path, value);
+    if (result?.handled) {
+      if (result.invalidatesPrepared) preparedStaleRef.current = true;
+      return;
+    }
+    setReport((r) => setPath(r, path, value));
+  };
+
+  /** The PDF rendition of the current state, for the preview's PDF tab. */
+  const makePdf = async (): Promise<Uint8Array> => {
+    const full = serialize(report);
+    const prepared = await preparedFor(full);
+    return (await renderToFormat('pdf', render, full, prepared)) as Uint8Array;
   };
 
   const handleExportBundle = async () => {
+    setExportMenuOpen(false);
     setBusy('bundle');
     try {
       const { save } = await import('@tauri-apps/plugin-dialog');
@@ -192,6 +264,8 @@ export function ReportShell<R extends ReportBase>({
     }
   };
 
+  const busyLabel = (key: string, idle: string) => (busy === key ? 'Working…' : idle);
+
   return (
     <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4">
       <div className="w-full max-w-4xl max-h-[92vh] bg-drone-secondary border border-gray-700 rounded-xl flex flex-col overflow-hidden shadow-2xl">
@@ -204,7 +278,7 @@ export function ReportShell<R extends ReportBase>({
             <input
               value={reportName}
               onChange={(e) => setReportName(e.target.value)}
-              className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-white w-48"
+              className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-white w-44"
               placeholder="Report name"
             />
             <button
@@ -215,26 +289,43 @@ export function ReportShell<R extends ReportBase>({
               {busy === 'save' ? 'Saving…' : reportId ? 'Save' : 'Save as new'}
             </button>
             <button
-              onClick={handleExportPdf}
+              onClick={handlePreview}
               disabled={busy != null}
-              className="px-3 py-1.5 rounded bg-drone-primary hover:bg-drone-primary/80 text-white text-xs font-medium disabled:opacity-50"
+              title="See the report as it will export and edit its text in place"
+              className="px-3 py-1.5 rounded bg-sky-600/80 hover:bg-sky-600 text-white text-xs font-medium disabled:opacity-50"
             >
-              {busy === 'pdf' ? 'Exporting…' : 'Export PDF'}
+              {busy === 'preview' ? 'Preparing…' : 'Preview & edit'}
             </button>
-            <button
-              onClick={handleExportRtf}
-              disabled={busy != null}
-              className="px-3 py-1.5 rounded bg-drone-primary/70 hover:bg-drone-primary text-white text-xs font-medium disabled:opacity-50"
-            >
-              {busy === 'rtf' ? 'Exporting…' : 'Export RTF'}
-            </button>
+            <div ref={exportMenuRef} className="relative">
+              <button
+                onClick={() => setExportMenuOpen((o) => !o)}
+                disabled={busy != null}
+                className="px-3 py-1.5 rounded bg-drone-primary hover:bg-drone-primary/80 text-white text-xs font-medium disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {busy && busy in EXPORT_FORMATS ? 'Exporting…' : 'Export'}
+                <span className={`text-[9px] transition-transform ${exportMenuOpen ? 'rotate-180' : ''}`}>▼</span>
+              </button>
+              {exportMenuOpen && (
+                <div className="absolute right-0 mt-1 w-44 rounded-lg border border-gray-600 bg-gray-800 shadow-xl z-50 py-1 text-xs">
+                  {(Object.keys(EXPORT_FORMATS) as ExportFormat[]).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => handleExport(f)}
+                      className="w-full text-left px-3 py-2 text-gray-200 hover:bg-drone-primary/20"
+                    >
+                      {EXPORT_FORMATS[f].label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={handleExportBundle}
               disabled={busy != null}
               title="Save the complete inspection — report, assets, annotations, networks and linked flight data — as a single portable file"
               className="px-3 py-1.5 rounded bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-medium disabled:opacity-50"
             >
-              {busy === 'bundle' ? 'Exporting…' : 'Export Bundle'}
+              {busyLabel('bundle', 'Export Bundle')}
             </button>
             <button onClick={onClose} className="ml-1 text-gray-400 hover:text-white px-2 py-1">
               ✕
@@ -301,6 +392,18 @@ export function ReportShell<R extends ReportBase>({
           ))}
         </div>
       </div>
+
+      {preview && (
+        <ReportPreview
+          html={preview.html}
+          busy={busy}
+          onEdit={handlePreviewEdit}
+          onExport={handleExport}
+          makePdf={makePdf}
+          onRefresh={handlePreview}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </div>
   );
 }

@@ -54,9 +54,11 @@ export function ThermalStudio() {
     setAnnotationStyle,
     annotations,
     setAnnotations,
+    setAssetNotes,
   } = useThermalStore();
 
   const [showReportBuilder, setShowReportBuilder] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
   const [reportMenuOpen, setReportMenuOpen] = useState(false);
   const exportComposedRef = useRef<(() => Promise<string | null>) | null>(null);
   const reportMenuRef = useRef<HTMLDivElement>(null);
@@ -298,9 +300,9 @@ export function ThermalStudio() {
                   Import inspection bundle…
                 </button>
                 <div className="px-3 py-1.5 text-[10px] text-gray-500 border-t border-gray-700 mt-1">
-                  Build inspection reports (PDF/RTF) from thermal findings, Metashape
-                  orthomosaics and linked DJI flights — or exchange complete
-                  inspections as single .odlbundle files.
+                  Build inspection reports (PDF, Word, RTF) from thermal findings, Metashape
+                  orthomosaics and linked DJI flights — preview and edit the text before
+                  exporting — or exchange complete inspections as single .odlbundle files.
                 </div>
               </div>
             )}
@@ -407,7 +409,33 @@ export function ThermalStudio() {
                 >
                   ✕ Clear
                 </button>
+                <div className="w-px h-5 bg-gray-700 mx-1" />
+                <button
+                  onClick={() => setNoteOpen((o) => !o)}
+                  className={`px-2 py-1 rounded text-xs border transition-colors ${
+                    noteOpen || selectedAsset.notes
+                      ? 'bg-amber-500/15 border-amber-500/60 text-amber-200'
+                      : 'border-transparent text-gray-400 hover:text-white'
+                  }`}
+                  title="Note for this picture — printed under it in reports"
+                >
+                  📝 Note{selectedAsset.notes ? ' ●' : ''}
+                </button>
               </div>
+
+              {noteOpen && (
+                <div className="px-3 py-2 border-b border-gray-700 bg-amber-500/5">
+                  <label className="block text-[10px] text-gray-400 mb-1">
+                    Note for this picture — appears under it in reports (imaging pairs, survey figures)
+                  </label>
+                  <textarea
+                    value={selectedAsset.notes ?? ''}
+                    onChange={(e) => setAssetNotes(selectedAsset.id, e.target.value)}
+                    placeholder="Observed condition, context, measurements, follow-up…"
+                    className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-white placeholder-gray-500 focus:outline-none focus:border-amber-400 min-h-[56px]"
+                  />
+                </div>
+              )}
 
               <ThermalViewer
                 key={selectedAsset.id}

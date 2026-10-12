@@ -1,33 +1,29 @@
 /**
- * Photogrammetry survey report export (PDF + RTF).
+ * Photogrammetry survey report, rendered once against ReportWriter (PDF,
+ * Word, RTF and the editable preview all come from this).
  *
  * Sections: Header Data · Survey Scope & Summary · Flight Operations ·
  * Photogrammetry Outputs (Agisoft Metashape) · Survey Imagery · Findings &
- * Observations · Conclusions & Recommendations. Shared sections come from
- * ./common; the outputs summary and findings are specific to this kind.
+ * Observations · Conclusions & Recommendations.
  */
 
 import { PHOTO_FINDING_CATEGORIES } from '@/types/thermal';
 import type { PhotogrammetryReport } from '@/types/thermal';
 import type { PhotogrammetryFigure } from '@/lib/photogrammetryExport';
-import { createPdfWriter } from './pdfWriter';
-import { RtfWriter } from './rtfWriter';
 import {
   PHOTOGRAMMETRY_HEADER_LABELS,
   SEVERITY_LABELS,
+  edit,
+  figuresSection,
+  flightOperations,
   generatedBy,
   hasOrthoContent,
-  pdfFigures,
-  pdfFlightOperations,
-  pdfHeaderData,
-  pdfOrthoBody,
+  headerData,
+  orthoBody,
   prioritySummary,
-  rtfFigures,
-  rtfFlightOperations,
-  rtfHeaderData,
-  rtfOrthoBody,
   type OrthoExtras,
 } from './common';
+import type { ReportWriter } from './writer';
 
 /** One imported Metashape deliverable listed in the outputs section. */
 export interface MetashapeOutputSummary {
@@ -36,14 +32,12 @@ export interface MetashapeOutputSummary {
   details: string;
 }
 
-export interface PhotogrammetryReportExtras extends OrthoExtras {
-  /** Composed figures in report order. */
+export interface PhotogrammetryPrepared extends OrthoExtras {
+  /** Composed figures (images, provenance, notes) keyed by entry id. */
   figures: PhotogrammetryFigure[];
-  /** The Metashape deliverables selected for this report (orthomosaics, reports, point clouds…). */
+  /** The Metashape deliverables selected for this report. */
   metashapeOutputs: MetashapeOutputSummary[];
 }
-
-const SUBTITLE = generatedBy('Agisoft Metashape workflow');
 
 /** "Figure 3" for a finding's linked figure, or '—'. */
 function figureRef(report: PhotogrammetryReport, figureId: string | null): string {
@@ -52,54 +46,61 @@ function figureRef(report: PhotogrammetryReport, figureId: string | null): strin
   return idx < 0 ? '—' : `Figure ${idx + 1}`;
 }
 
-function hasOutputsContent(report: PhotogrammetryReport, extras: PhotogrammetryReportExtras): boolean {
+function hasOutputsContent(report: PhotogrammetryReport, p: PhotogrammetryPrepared): boolean {
   return (
-    hasOrthoContent(extras, report.orthomosaicLink) ||
+    hasOrthoContent(p, report.orthomosaicLink) ||
     !!report.processingNotes.trim() ||
-    extras.metashapeOutputs.length > 0
+    p.metashapeOutputs.length > 0
   );
 }
 
-export async function buildPhotogrammetryReportPdf(
+export function renderPhotogrammetryReport(
+  w: ReportWriter,
   report: PhotogrammetryReport,
-  extras: PhotogrammetryReportExtras,
-): Promise<Uint8Array> {
-  const w = await createPdfWriter();
-  const { doc } = w;
-
-  w.title('Photogrammetry Survey Report', SUBTITLE);
-  pdfHeaderData(
+  p: PhotogrammetryPrepared,
+): void {
+  w.title('Photogrammetry Survey Report', generatedBy('Agisoft Metashape workflow'));
+  headerData(
     w,
     report,
     PHOTOGRAMMETRY_HEADER_LABELS,
-    report.projectName.trim() ? [['Project', report.projectName]] : [],
+    report.projectName.trim() || w.editable ? [['Project', report.projectName, edit('projectName', true)]] : [],
   );
 
-  if (report.surveyPurpose.trim() || report.summary.trim()) {
+  if (report.surveyPurpose.trim() || report.summary.trim() || w.editable) {
     w.sectionHeading('Survey Scope & Summary');
-    w.paragraph(report.surveyPurpose);
-    w.paragraph(report.summary);
+    w.paragraph(report.surveyPurpose, {
+      edit: edit('surveyPurpose'),
+      hint: 'Objective, area of interest, required accuracy, deliverables requested…',
+    });
+    w.paragraph(report.summary, {
+      edit: edit('summary'),
+      hint: 'Deliverables produced, coverage, overall site condition…',
+    });
   }
 
-  pdfFlightOperations(w, report.linkedFlights ?? []);
+  flightOperations(w, report.linkedFlights ?? []);
 
-  if (hasOutputsContent(report, extras)) {
+  if (hasOutputsContent(report, p) || w.editable) {
     w.sectionHeading('Photogrammetry Outputs (Agisoft Metashape)');
-    pdfOrthoBody(w, extras, report.orthomosaicLink);
-    if (report.processingNotes.trim()) {
+    orthoBody(w, p, report.orthomosaicLink);
+    if (report.processingNotes.trim() || w.editable) {
       w.subheading('Processing notes');
-      w.paragraph(report.processingNotes);
+      w.paragraph(report.processingNotes, {
+        edit: edit('processingNotes'),
+        hint: 'Software, alignment, GSD, control points, CRS…',
+      });
     }
-    if (extras.metashapeOutputs.length > 0) {
+    if (p.metashapeOutputs.length > 0) {
       w.subheading('Deliverables');
-      for (const o of extras.metashapeOutputs) {
-        w.lines(`${o.fileName} — ${o.kindLabel}${o.details ? ` · ${o.details}` : ''}`, 8.5, 4.2);
+      for (const o of p.metashapeOutputs) {
+        w.detail(`${o.fileName} — ${o.kindLabel}${o.details ? ` · ${o.details}` : ''}`);
       }
-      w.y += 3;
+      w.space(3);
     }
   }
 
-  pdfFigures(w, extras.figures, 'Survey Imagery');
+  figuresSection(w, 'Survey Imagery', report.figures, p.figures);
 
   // ---- Findings ----
   w.sectionHeading('Findings & Observations');
@@ -116,101 +117,35 @@ export async function buildPhotogrammetryReportPdf(
         { label: 'Category', w: 56 },
         { label: 'Severity', w: 20 },
       ],
-      report.findings.map((f) => [
+      report.findings.map((f, i) => [
         f.refId,
         figureRef(report, f.figureId),
-        f.location,
+        { text: f.location, edit: edit(`findings.${i}.location`, true) },
         PHOTO_FINDING_CATEGORIES[f.category] ?? f.category,
         SEVERITY_LABELS[f.severity] ?? f.severity,
       ]),
     );
-    for (const f of report.findings) {
-      if (!f.observation.trim() && !f.recommendation.trim()) continue;
-      w.checkPage(14);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text(`${f.refId} — ${PHOTO_FINDING_CATEGORIES[f.category] ?? f.category}`, w.margin, w.y);
-      w.y += 4.5;
-      if (f.observation.trim()) w.paragraph(f.observation, 9);
-      if (f.recommendation.trim()) {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        w.checkPage(6);
-        doc.text('Recommendation:', w.margin, w.y);
-        w.y += 4.5;
-        w.paragraph(f.recommendation, 9);
+    report.findings.forEach((f, i) => {
+      if (!f.observation.trim() && !f.recommendation.trim() && !w.editable) return;
+      w.boldLine(`${f.refId} — ${PHOTO_FINDING_CATEGORIES[f.category] ?? f.category}`);
+      w.paragraph(f.observation, { edit: edit(`findings.${i}.observation`), hint: 'Describe the observation…', size: 9 });
+      if (f.recommendation.trim() || w.editable) {
+        w.boldLine('Recommendation:');
+        w.paragraph(f.recommendation, {
+          edit: edit(`findings.${i}.recommendation`),
+          hint: 'Recommended follow-up…',
+          size: 9,
+        });
       }
-    }
+    });
   }
 
   // ---- Conclusions ----
   w.sectionHeading('Conclusions & Recommendations');
-  w.paragraph(report.conclusions.trim() || 'No conclusions recorded.');
+  w.paragraph(report.conclusions, { edit: edit('conclusions'), placeholder: 'No conclusions recorded.' });
   if (report.findings.length > 0) {
-    w.paragraph(prioritySummary(report.findings.map((f) => f.severity)), 9);
+    w.paragraph(prioritySummary(report.findings.map((f) => f.severity)), { size: 9 });
   }
 
   w.footers(report.propertyAddress.trim() || report.projectName);
-  return w.bytes();
-}
-
-export function buildPhotogrammetryReportRtf(
-  report: PhotogrammetryReport,
-  extras: PhotogrammetryReportExtras,
-): string {
-  const w = new RtfWriter();
-  w.title('Photogrammetry Survey Report', SUBTITLE);
-  rtfHeaderData(
-    w,
-    report,
-    PHOTOGRAMMETRY_HEADER_LABELS,
-    report.projectName.trim() ? [['Project', report.projectName]] : [],
-  );
-
-  if (report.surveyPurpose.trim() || report.summary.trim()) {
-    w.sectionHeading('Survey Scope & Summary');
-    w.para(report.surveyPurpose);
-    w.para(report.summary);
-  }
-
-  rtfFlightOperations(w, report.linkedFlights ?? []);
-
-  if (hasOutputsContent(report, extras)) {
-    w.sectionHeading('Photogrammetry Outputs (Agisoft Metashape)');
-    rtfOrthoBody(w, extras, report.orthomosaicLink);
-    if (report.processingNotes.trim()) {
-      w.sub('Processing notes');
-      w.para(report.processingNotes);
-    }
-    if (extras.metashapeOutputs.length > 0) {
-      w.sub('Deliverables');
-      for (const o of extras.metashapeOutputs) {
-        w.kv(o.fileName, `${o.kindLabel}${o.details ? ` · ${o.details}` : ''}`);
-      }
-    }
-  }
-
-  rtfFigures(w, extras.figures, 'Survey Imagery');
-
-  w.sectionHeading('Findings & Observations');
-  if (report.findings.length === 0) {
-    w.para('No findings recorded.');
-  } else {
-    for (const f of report.findings) {
-      w.sub(`${f.refId} — ${SEVERITY_LABELS[f.severity] ?? f.severity} severity`);
-      w.kv('Figure', figureRef(report, f.figureId));
-      w.kv('Location', f.location || '—');
-      w.kv('Category', PHOTO_FINDING_CATEGORIES[f.category] ?? f.category);
-      if (f.observation.trim()) w.kv('Observation', f.observation);
-      if (f.recommendation.trim()) w.kv('Recommendation', f.recommendation);
-    }
-  }
-
-  w.sectionHeading('Conclusions & Recommendations');
-  w.para(report.conclusions.trim() || 'No conclusions recorded.');
-  if (report.findings.length > 0) {
-    w.para(prioritySummary(report.findings.map((f) => f.severity)));
-  }
-
-  return w.finish();
 }

@@ -1,11 +1,11 @@
 /**
- * Photogrammetry survey report workflow: sections, export composition and
+ * Photogrammetry survey report workflow: sections, export-time content and
  * the report-kind hooks for the shared shell. The figure list is the
  * Photogrammetry tab's queue (shared store): saving snapshots it into the
  * report, loading a saved report restores it.
  *
  * To add a component to this report, add a field to PhotogrammetryReport, a
- * section definition below, and its renderer in
+ * section definition below, and render it in
  * src/lib/reports/photogrammetryReport.ts.
  */
 
@@ -16,10 +16,9 @@ import { buildPhotogrammetryFigures } from '@/lib/photogrammetryExport';
 import { PHOTOGRAMMETRY_HEADER_LABELS } from '@/lib/reports/common';
 import { collectOrthoExtras } from '@/lib/reports/extras';
 import {
-  buildPhotogrammetryReportPdf,
-  buildPhotogrammetryReportRtf,
+  renderPhotogrammetryReport,
   type MetashapeOutputSummary,
-  type PhotogrammetryReportExtras,
+  type PhotogrammetryPrepared,
 } from '@/lib/reports/photogrammetryReport';
 import {
   EMPTY_PHOTOGRAMMETRY_REPORT,
@@ -28,7 +27,8 @@ import {
   type PhotogrammetryReport,
   type ThermalAsset,
 } from '@/types/thermal';
-import { ReportShell } from './ReportShell';
+import { ReportShell, type PreviewEditResult } from './ReportShell';
+import { routeAssetNoteEdit } from './ThermalReportBuilder';
 import { HeaderSection } from './sections/HeaderSection';
 import { FlightDataSection } from './sections/FlightDataSection';
 import { OrthomosaicSection } from './sections/OrthomosaicSection';
@@ -140,37 +140,29 @@ function metashapeOutputs(assets: ThermalAsset[], selectedIds: number[]): Metash
     });
 }
 
+const FIGURE_CAPTION = /^figures\.(\d+)\.caption$/;
+
 interface Props {
   onClose: () => void;
 }
 
 export function PhotogrammetryReportBuilder({ onClose }: Props) {
   const assets = useThermalStore((s) => s.assets);
-  const { queue, setQueue } = usePhotogrammetryStore();
+  const { queue, setQueue, updateEntry } = usePhotogrammetryStore();
 
-  const collectExtras = useCallback(
-    async (report: PhotogrammetryReport): Promise<PhotogrammetryReportExtras> => {
-      // Debounced annotation edits from the Photogrammetry tab must be in the
-      // DB before the figures are composed from it.
+  const prepare = useCallback(
+    async (report: PhotogrammetryReport): Promise<PhotogrammetryPrepared> => {
+      // Debounced annotation and note edits must be in the DB / list first
       await usePhotogrammetryStore.getState().flushAnnotations();
+      await useThermalStore.getState().flushAssetNotes();
+      const current = useThermalStore.getState().assets;
       return {
-        ...(await collectOrthoExtras(report.orthoAssetId, assets)),
-        figures: await buildPhotogrammetryFigures(report.figures, assets),
-        metashapeOutputs: metashapeOutputs(assets, report.outputAssetIds),
+        ...(await collectOrthoExtras(report.orthoAssetId, current)),
+        figures: await buildPhotogrammetryFigures(report.figures, current),
+        metashapeOutputs: metashapeOutputs(current, report.outputAssetIds),
       };
     },
-    [assets],
-  );
-
-  const buildPdf = useCallback(
-    async (report: PhotogrammetryReport) =>
-      buildPhotogrammetryReportPdf(report, await collectExtras(report)),
-    [collectExtras],
-  );
-  const buildRtf = useCallback(
-    async (report: PhotogrammetryReport) =>
-      buildPhotogrammetryReportRtf(report, await collectExtras(report)),
-    [collectExtras],
+    [],
   );
 
   // The queue store is canonical for figures: snapshot it on save/export and
@@ -204,6 +196,20 @@ export function PhotogrammetryReportBuilder({ onClose }: Props) {
     }
   }, [queue, setQueue]);
 
+  /** Figure captions live in the queue; picture notes on the asset. */
+  const onPreviewEdit = useCallback(
+    (path: string, value: string): PreviewEditResult => {
+      const m = FIGURE_CAPTION.exec(path);
+      if (m) {
+        const entry = queue[Number(m[1])];
+        if (entry) updateEntry(entry.id, { caption: value });
+        return { handled: true };
+      }
+      return routeAssetNoteEdit(path, value);
+    },
+    [queue, updateEntry],
+  );
+
   const referencedAssetIds = useCallback(
     (report: PhotogrammetryReport): number[] => {
       // Only this report's own evidence travels: its figures, the embedded
@@ -219,7 +225,7 @@ export function PhotogrammetryReportBuilder({ onClose }: Props) {
   );
 
   return (
-    <ReportShell<PhotogrammetryReport>
+    <ReportShell<PhotogrammetryReport, PhotogrammetryPrepared>
       kind="photogrammetry"
       title="Photogrammetry Survey Report"
       icon="📷"
@@ -230,8 +236,9 @@ export function PhotogrammetryReportBuilder({ onClose }: Props) {
       onLoaded={onLoaded}
       serialize={serialize}
       referencedAssetIds={referencedAssetIds}
-      buildPdf={buildPdf}
-      buildRtf={buildRtf}
+      prepare={prepare}
+      render={renderPhotogrammetryReport}
+      onPreviewEdit={onPreviewEdit}
       onNewBlank={onNewBlank}
       onClose={onClose}
     />

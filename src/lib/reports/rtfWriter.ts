@@ -1,8 +1,23 @@
 /**
- * Minimal RTF writer shared by every report kind (opens in Word/LibreOffice,
- * images embedded as PNG/JPEG picts). Same role as PdfWriter: builders only
- * compose sections.
+ * RTF implementation of ReportWriter (opens in Word/LibreOffice, images
+ * embedded as PNG/JPEG picts, tables as \trowd rows).
  */
+
+import {
+  CONTENT_WIDTH_MM,
+  FIGURE_MAX_H_MM,
+  cellText,
+  figureTitle,
+  type EditRef,
+  type FigureSpec,
+  type ImagePairSpec,
+  type KvOptions,
+  type NoteSpec,
+  type ReportWriter,
+  type TableCell,
+  type TableColumn,
+  type TextOptions,
+} from './writer';
 
 export function rtfEscape(text: string): string {
   let out = '';
@@ -55,16 +70,25 @@ export function fitTwips(aspect: number, maxW: number, maxH: number): { w: numbe
   return { w, h };
 }
 
-export class RtfWriter {
+const TWIPS_PER_MM = 56.69;
+/** A4 with 16 mm margins, like the PDF — the table columns assume its 178 mm text width. */
+const PAGE_SETUP = '\\paperw11906\\paperh16838\\margl907\\margr907\\margt907\\margb907';
+
+export class RtfWriter implements ReportWriter {
+  readonly editable = false;
+  /** Prolog: header, font/color tables, page setup. */
+  private readonly prolog: string;
   private readonly parts: string[] = [];
+  /** Footer destination — RTF wants it before the section's paragraphs. */
+  private footerGroup = '';
   private sectionNo = 1;
 
   constructor() {
-    // Color table: 1 = accent blue, 2 = warning red, 3 = gray
-    this.parts.push(
+    // Color table: 1 = accent blue, 2 = warning red, 3 = gray, 4 = white
+    this.prolog =
       '{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Helvetica;}{\\f1 Courier New;}}' +
-        '{\\colortbl;\\red20\\green60\\blue110;\\red200\\green60\\blue40;\\red110\\green110\\blue110;}',
-    );
+      '{\\colortbl;\\red20\\green60\\blue110;\\red200\\green60\\blue40;\\red110\\green110\\blue110;\\red255\\green255\\blue255;}' +
+      PAGE_SETUP;
   }
 
   title(text: string, subtitle: string): void {
@@ -73,42 +97,121 @@ export class RtfWriter {
   }
 
   sectionHeading(title: string): void {
-    this.heading(`${this.sectionNo++}. ${title}`);
+    this.parts.push(`{\\pard\\sb240\\sa120\\b\\fs28\\cf1 ${rtfEscape(`${this.sectionNo++}. ${title}`)}\\par}`);
   }
 
-  heading(text: string): void {
-    this.parts.push(`{\\pard\\sb240\\sa120\\b\\fs28\\cf1 ${rtfEscape(text)}\\par}`);
-  }
-
-  sub(text: string): void {
+  subheading(text: string): void {
     this.parts.push(`{\\pard\\sb120\\sa60\\b\\fs22 ${rtfEscape(text)}\\par}`);
   }
 
-  para(text: string): void {
+  paragraph(text: string, options?: TextOptions): void {
+    const body = text.trim() ? text : options?.placeholder ?? '';
+    if (!body.trim()) return;
+    this.parts.push(`{\\pard\\sa120\\fs${(options?.size ?? 10) * 2} ${rtfEscape(body)}\\par}`);
+  }
+
+  detail(text: string): void {
     if (!text.trim()) return;
-    this.parts.push(`{\\pard\\sa120\\fs20 ${rtfEscape(text)}\\par}`);
+    this.parts.push(`{\\pard\\sa40\\fs17 ${rtfEscape(text)}\\par}`);
   }
 
-  kv(key: string, value: string): void {
-    this.parts.push(`{\\pard\\sa60\\fs20{\\b ${rtfEscape(key)}: }${rtfEscape(value || '—')}\\par}`);
-  }
-
-  /** Small gray line (captions, provenance). */
-  gray(text: string): void {
+  smallText(text: string): void {
+    if (!text.trim()) return;
     this.parts.push(`{\\pard\\sa120\\fs16\\cf3 ${rtfEscape(text)}\\par}`);
   }
 
-  /** Embedded image paragraph. */
+  boldLine(text: string): void {
+    this.parts.push(`{\\pard\\sb60\\sa20\\b\\fs18 ${rtfEscape(text)}\\par}`);
+  }
+
+  kv(key: string, value: string, _edit?: EditRef, options?: KvOptions): void {
+    const fs = options?.compact ? 16 : 20;
+    this.parts.push(`{\\pard\\sa60\\fs${fs}{\\b ${rtfEscape(key)}: }${rtfEscape(value || '—')}\\par}`);
+  }
+
+  link(url: string): void {
+    if (!url.trim()) return;
+    this.parts.push(`{\\pard\\sa120\\fs20 ${rtfEscape(url)}\\par}`);
+  }
+
   pict(dataUrl: string, widthTwips: number, heightTwips: number): void {
     this.parts.push(`{\\pard\\sa60 ${dataUrlToRtfPict(dataUrl, widthTwips, heightTwips)}\\par}`);
   }
 
-  /** Escape hatch for layouts the helpers do not cover (already-escaped RTF). */
-  raw(rtf: string): void {
-    this.parts.push(rtf);
+  figure(spec: FigureSpec): void {
+    const title = figureTitle(spec);
+    if (title) this.subheading(title);
+    if (spec.image) {
+      // ~16cm wide, height capped like the PDF (never beyond the page body)
+      const maxH = Math.round(Math.min(spec.maxHeightMm ?? FIGURE_MAX_H_MM, 240) * TWIPS_PER_MM);
+      const { w, h } = fitTwips(spec.aspect, 9072, maxH);
+      this.pict(spec.image, w, h);
+    } else {
+      this.paragraph('(image unavailable)');
+    }
+    this.smallText(spec.details);
+    if (spec.note?.trim()) this.notes([{ label: 'Note', text: spec.note }]);
+  }
+
+  imagePair(spec: ImagePairSpec): void {
+    this.subheading(`${spec.index}. ${spec.caption || 'Imaging pair'}`);
+    // ~7.5cm wide each (4252 twips), 4:3
+    const pw = 4252;
+    const ph = 3189;
+    const left = spec.leftImage ? dataUrlToRtfPict(spec.leftImage, pw, ph) : `(no ${spec.leftLabel.toLowerCase()})`;
+    const right = spec.rightImage ? dataUrlToRtfPict(spec.rightImage, pw, ph) : `(no ${spec.rightLabel.toLowerCase()})`;
+    this.parts.push(
+      `{\\pard\\sa60\\fs18\\cf3 ${rtfEscape(spec.leftLabel)}\\tab\\tab ${rtfEscape(spec.rightLabel)}\\par}`,
+    );
+    this.parts.push(`{\\pard\\sa120 ${left} ${right}\\par}`);
+  }
+
+  notes(notes: NoteSpec[]): void {
+    for (const n of notes) {
+      if (!n.text.trim()) continue;
+      this.parts.push(`{\\pard\\sa40\\fs17{\\b ${rtfEscape(n.label)}: }${rtfEscape(n.text)}\\par}`);
+    }
+  }
+
+  table(cols: TableColumn[], rows: TableCell[][]): void {
+    const total = cols.reduce((s, c) => s + c.w, 0) || CONTENT_WIDTH_MM;
+    const scale = (CONTENT_WIDTH_MM * TWIPS_PER_MM) / total;
+    let cum = 0;
+    const edges = cols.map((c) => {
+      cum += c.w * scale;
+      return Math.round(cum);
+    });
+    const border = '\\clbrdrt\\brdrs\\brdrw10\\clbrdrl\\brdrs\\brdrw10\\clbrdrb\\brdrs\\brdrw10\\clbrdrr\\brdrs\\brdrw10';
+    const rowDef = (shaded: boolean) =>
+      '\\trowd\\trgaph60\\trpaddl60\\trpaddr60' +
+      edges.map((e) => `${border}${shaded ? '\\clcbpat1' : ''}\\cellx${e}`).join('');
+    // Each cell is its own group so character formatting (\b, \cf) cannot
+    // leak into the following cells and paragraphs
+    const header =
+      rowDef(true) +
+      cols.map((c) => `{\\pard\\intbl\\b\\fs16\\cf4 ${rtfEscape(c.label)}\\cell}`).join('') +
+      '\\row';
+    this.parts.push(header);
+    for (const cells of rows) {
+      this.parts.push(
+        rowDef(false) +
+          cells.map((cell) => `{\\pard\\intbl\\fs16 ${rtfEscape(cellText(cell))}\\cell}`).join('') +
+          '\\row',
+      );
+    }
+    this.parts.push('{\\pard\\sa120\\par}');
+  }
+
+  space(): void {
+    this.parts.push('{\\pard\\sa60\\par}');
+  }
+
+  footers(left: string): void {
+    const text = left.trim() ? `${rtfEscape(left)}\\tab\\tab ` : '';
+    this.footerGroup = `{\\footer\\pard\\qr\\fs16\\cf3 ${text}Page {\\field{\\*\\fldinst PAGE}{\\fldrslt 1}} of {\\field{\\*\\fldinst NUMPAGES}{\\fldrslt 1}}\\par}`;
   }
 
   finish(): string {
-    return [...this.parts, '}'].join('\n');
+    return [this.prolog, this.footerGroup, ...this.parts, '}'].filter(Boolean).join('\n');
   }
 }

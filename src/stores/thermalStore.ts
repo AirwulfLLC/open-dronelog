@@ -77,6 +77,9 @@ interface ThermalState {
   /** Re-read the selected asset's annotations — Metashape assets are shared
    *  with the Photogrammetry tab, which may have edited them meanwhile. */
   refreshAnnotations: () => Promise<void>;
+  /** Per-picture note printed under the picture in reports (any library). */
+  setAssetNotes: (assetId: number, notes: string) => void;
+  flushAssetNotes: () => Promise<void>;
   clearError: () => void;
   setNetwork: (network: ThermalNetworkModel, persist?: boolean) => void;
   addNetNode: (node: NetNode) => void;
@@ -99,6 +102,12 @@ const networkPersister = makeDebouncedPersister<AssetJson>(
   ({ assetId, json }) => thermalApi.setThermalNetwork(assetId, json),
   'thermal network',
 );
+const notesPersister = makeDebouncedPersister<{ assetId: number; notes: string }>(
+  ({ assetId, notes }) => thermalApi.updateThermalAssetNotes(assetId, notes.trim() ? notes : null),
+  'asset notes',
+);
+/** Asset whose note edit is still debounced — the persister holds one payload. */
+let pendingNoteAssetId: number | null = null;
 
 let currentObjectUrl: string | null = null;
 
@@ -159,6 +168,8 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
 
   loadAssets: async () => {
     try {
+      // A note typed moments ago must reach the DB before the list is re-read
+      await notesPersister.flush();
       const assets = await thermalApi.listThermalAssets();
       set({ assets, assetsLoaded: true });
     } catch (e) {
@@ -199,6 +210,7 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
     // carry their own assetId, so this is safe after the state switches too).
     annotationsPersister.flush();
     networkPersister.flush();
+    void get().flushAssetNotes();
     set({
       selectedAssetId: assetId,
       analysis: null,
@@ -422,6 +434,24 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
     } catch {
       // keep the in-memory list
     }
+  },
+
+  setAssetNotes: (assetId, notes) => {
+    // The persister holds one pending payload: a still-debounced note for a
+    // different asset must be written before it is replaced.
+    if (pendingNoteAssetId != null && pendingNoteAssetId !== assetId) void notesPersister.flush();
+    pendingNoteAssetId = assetId;
+    // Keep the text exactly as typed (leading spaces/newlines included); the
+    // persister stores blank notes as null
+    set((s) => ({
+      assets: s.assets.map((a) => (a.id === assetId ? { ...a, notes: notes === '' ? null : notes } : a)),
+    }));
+    notesPersister.schedule({ assetId, notes });
+  },
+
+  flushAssetNotes: () => {
+    pendingNoteAssetId = null;
+    return notesPersister.flush();
   },
 
   clearError: () => set({ error: null }),
