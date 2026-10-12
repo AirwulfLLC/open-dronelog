@@ -9,6 +9,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+/** Mirrors MAX_DISPLAY_NAME_CHARS in src-tauri/src/thermal/mod.rs (stem + extension). */
+export const MAX_NAME_CHARS = 200;
+
 /** "DJI_0001.JPG" → stem "DJI_0001", ext ".JPG". Dot-files and bare names
  *  have no extension (the backend splits the same way). */
 export function splitExtension(fileName: string): { stem: string; ext: string } {
@@ -31,8 +34,11 @@ export function AssetNameEditor({ fileName, onCommit, onDone, className }: Props
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  // onDone unmounts the editor; the blur that follows must not commit again
+  // Refs, not state: onDone unmounts the editor and disabling the field
+  // drops its focus, and the blur either one triggers can arrive before
+  // React re-renders — it must not commit again.
   const finishedRef = useRef(false);
+  const busyRef = useRef(false);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -46,22 +52,27 @@ export function AssetNameEditor({ fileName, onCommit, onDone, className }: Props
   };
 
   const commit = async (fromBlur: boolean) => {
-    if (finishedRef.current || busy) return;
+    if (finishedRef.current || busyRef.current) return;
     const next = stem.trim();
     // Unchanged, or focus left an emptied field: nothing to save
     if (next === original.trim() || (fromBlur && !next)) {
       finish();
       return;
     }
+    busyRef.current = true;
     setBusy(true);
     try {
       await onCommit(next + ext);
       finish();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      busyRef.current = false;
       setBusy(false);
-      // Keep the refused name in front of the user (Escape still cancels)
-      requestAnimationFrame(() => inputRef.current?.focus());
+      // Enter: disabling the field while busy dropped its focus — give it
+      // back. Blur: the user has moved on; the message waits here without
+      // pulling the cursor out of wherever they went (a refused name must
+      // never trap the focus).
+      if (!fromBlur) requestAnimationFrame(() => inputRef.current?.focus());
     }
   };
 
@@ -76,7 +87,7 @@ export function AssetNameEditor({ fileName, onCommit, onDone, className }: Props
           ref={inputRef}
           value={stem}
           disabled={busy}
-          maxLength={200}
+          maxLength={MAX_NAME_CHARS - ext.length}
           aria-label="Picture name"
           placeholder="Picture name"
           onChange={(e) => {
@@ -84,6 +95,8 @@ export function AssetNameEditor({ fileName, onCommit, onDone, className }: Props
             if (error) setError(null);
           }}
           onKeyDown={(e) => {
+            // An IME uses Enter/Escape to confirm or drop a candidate — not ours yet
+            if (e.nativeEvent.isComposing) return;
             if (e.key === 'Enter') {
               e.preventDefault();
               void commit(false);
@@ -96,12 +109,24 @@ export function AssetNameEditor({ fileName, onCommit, onDone, className }: Props
           className="flex-1 min-w-0 px-1 py-0.5 bg-gray-900 border border-drone-primary rounded text-xs text-white focus:outline-none disabled:opacity-60"
         />
         {ext && (
-          <span className="text-[10px] text-gray-500 flex-shrink-0" title="The file type is kept">
+          <span
+            className="text-[10px] text-gray-500 flex-shrink-0"
+            title="The file type is kept"
+            // Clicking the label must not blur (and so commit) the field
+            onMouseDown={(e) => e.preventDefault()}
+          >
             {ext}
           </span>
         )}
       </div>
-      {error && <div className="mt-0.5 text-[10px] text-red-400 whitespace-normal">{error}</div>}
+      {error && (
+        <div
+          className="mt-0.5 text-[10px] text-red-400 whitespace-normal"
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {error}
+        </div>
+      )}
     </div>
   );
 }

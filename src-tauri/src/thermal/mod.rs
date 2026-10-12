@@ -102,6 +102,16 @@ pub fn asset_type_for(file_name: &str) -> Option<&'static str> {
 /// Longest display name a rename accepts (characters).
 pub const MAX_DISPLAY_NAME_CHARS: usize = 200;
 
+/// Characters that would hide inside a printed name or reorder it: C0/C1
+/// controls plus the zero-width and bidirectional-override format characters.
+fn is_hidden_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}'
+        )
+}
+
 /// The display name an asset gets when the user renames it. The display name
 /// is what the libraries list and the reports print; the file on disk keeps
 /// its internal `{id}_{sanitized}` name, so the display name may carry spaces
@@ -111,7 +121,7 @@ pub const MAX_DISPLAY_NAME_CHARS: usize = 200;
 /// and probed, and the user is naming the picture, not converting it.
 pub fn display_name_for_rename(current_file_name: &str, requested: &str) -> Result<String, String> {
     let name = requested.trim();
-    if name.chars().any(|c| c == '/' || c == '\\' || c.is_control()) {
+    if name.chars().any(|c| c == '/' || c == '\\' || is_hidden_char(c)) {
         return Err("The name cannot contain slashes or control characters.".to_string());
     }
     let ext = Path::new(current_file_name)
@@ -291,6 +301,9 @@ mod tests {
         assert!(display_name_for_rename("x.JPG", "a\\b").is_err());
         assert!(display_name_for_rename("x.JPG", "a\nb").is_err());
         assert!(display_name_for_rename("x.JPG", "a\u{0}b").is_err());
+        // Bidi override and zero-width characters could disguise a printed name
+        assert!(display_name_for_rename("x.JPG", "a\u{202E}b").is_err());
+        assert!(display_name_for_rename("x.JPG", "\u{200B}").is_err());
         let long = "n".repeat(MAX_DISPLAY_NAME_CHARS);
         assert!(display_name_for_rename("x.JPG", &long).is_err());
         assert!(display_name_for_rename("x.JPG", &long[..MAX_DISPLAY_NAME_CHARS - 4]).is_ok());
@@ -298,8 +311,9 @@ mod tests {
 
     #[test]
     fn rename_survives_multibyte_text_before_the_extension() {
-        // The extension check cuts at a byte offset; a non-ASCII name whose
-        // tail happens to be the extension's length must not panic
+        // The extension check cuts at a byte offset: "éabc" is 5 bytes, so the
+        // cut for a 4-byte ".JPG" lands inside the "é" and must not panic
+        assert_eq!(display_name_for_rename("x.JPG", "éabc").unwrap(), "éabc.JPG");
         assert_eq!(display_name_for_rename("x.JPG", "éé").unwrap(), "éé.JPG");
         assert_eq!(display_name_for_rename("x.JPG", "ééé.jpg").unwrap(), "ééé.JPG");
     }

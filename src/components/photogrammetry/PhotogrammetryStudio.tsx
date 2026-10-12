@@ -65,6 +65,20 @@ function canQueue(asset: ThermalAsset): boolean {
   return asset.assetType === 'video' || hasDisplayableImage(asset);
 }
 
+/** The library filter's predicate (also used to reveal a row for renaming). */
+function matchesFilter(asset: ThermalAsset, filter: LibraryFilter): boolean {
+  switch (filter) {
+    case 'image':
+      return asset.source === 'photogrammetry' && asset.assetType === 'image';
+    case 'video':
+      return asset.assetType === 'video';
+    case 'metashape':
+      return asset.source === 'metashape';
+    default:
+      return true;
+  }
+}
+
 export function PhotogrammetryStudio() {
   const allAssets = useThermalStore((s) => s.assets);
   const assetsLoaded = useThermalStore((s) => s.assetsLoaded);
@@ -111,13 +125,19 @@ export function PhotogrammetryStudio() {
   const [noteOpen, setNoteOpen] = useState(false);
   /** Library item whose name is being edited inline. */
   const [renamingId, setRenamingId] = useState<number | null>(null);
-  const startRename = useCallback((assetId: number) => {
-    setRenamingId(assetId);
-    // Started from the info strip: bring the row's editor into view
-    requestAnimationFrame(() => {
-      document.querySelector(`[data-asset-row="${assetId}"]`)?.scrollIntoView({ block: 'nearest' });
-    });
-  }, []);
+  const startRename = useCallback(
+    (assetId: number) => {
+      // Started from the info strip: the row must be on screen, so a library
+      // filter hiding it is lifted and the row scrolled into view
+      const asset = assets.find((a) => a.id === assetId);
+      if (asset && !matchesFilter(asset, filter)) setFilter('all');
+      setRenamingId(assetId);
+      requestAnimationFrame(() => {
+        document.querySelector(`[data-asset-row="${assetId}"]`)?.scrollIntoView({ block: 'nearest' });
+      });
+    },
+    [assets, filter],
+  );
   const reportMenuRef = useRef<HTMLDivElement>(null);
   const videoTimeRef = useRef(0);
   // Pointer-driven queue reorder. HTML5 drag-and-drop is deliberately not
@@ -337,18 +357,10 @@ export function PhotogrammetryStudio() {
       return next;
     });
 
-  const visibleAssets = useMemo(() => {
-    switch (filter) {
-      case 'image':
-        return assets.filter((a) => a.source === 'photogrammetry' && a.assetType === 'image');
-      case 'video':
-        return assets.filter((a) => a.assetType === 'video');
-      case 'metashape':
-        return assets.filter((a) => a.source === 'metashape');
-      default:
-        return assets;
-    }
-  }, [assets, filter]);
+  const visibleAssets = useMemo(
+    () => (filter === 'all' ? assets : assets.filter((a) => matchesFilter(a, filter))),
+    [assets, filter],
+  );
 
   const queuedCount = useMemo(() => {
     const counts = new Map<number, number>();

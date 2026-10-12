@@ -168,7 +168,8 @@ The name is what the reports print — under each thermal imaging pair
 in the deliverables list — so `DJI_0417.JPG` can read `North wall – bay 3.JPG`
 in the finished report. The extension is kept (it tells the app how to serve
 the file) and the stored file is left untouched; renames travel in inspection
-bundles.
+bundles. (An anomaly's *Location* text is seeded from the picture's name when
+the anomaly is added and then stays as typed — edit it in the report builder.)
 
 ### Photogrammetry tab (report imagery)
 
