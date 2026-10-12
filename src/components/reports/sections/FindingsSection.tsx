@@ -1,7 +1,8 @@
 /**
- * Findings & Observations for photogrammetry surveys: numbered observations
- * with category, severity, location, optional link to a figure, and a
- * recommendation.
+ * Findings & Observations for photogrammetry surveys. A finding is a graded
+ * issue (category, severity, recommendation); an observation is a neutral
+ * note on what the imagery showed. Both can point at the figure documenting
+ * them.
  */
 
 import { useThermalStore } from '@/stores/thermalStore';
@@ -9,6 +10,7 @@ import { usePhotogrammetryStore } from '@/stores/photogrammetryStore';
 import {
   PHOTO_FINDING_CATEGORIES,
   type PhotogrammetryFinding,
+  type PhotogrammetryObservation,
   type PhotogrammetryReport,
   type Severity,
 } from '@/types/thermal';
@@ -28,10 +30,25 @@ export function FindingsActions({ report, update }: SectionProps<PhotogrammetryR
     };
     update({ findings: [...report.findings, finding] });
   };
+  const addObservation = () => {
+    const observation: PhotogrammetryObservation = {
+      id: nextEntryId('po'),
+      refId: `O-${String(report.observations.length + 1).padStart(2, '0')}`,
+      figureId: null,
+      location: '',
+      text: '',
+    };
+    update({ observations: [...report.observations, observation] });
+  };
   return (
-    <button onClick={addFinding} className={smallBtnCls}>
-      + Add finding
-    </button>
+    <div className="flex gap-1.5">
+      <button onClick={addFinding} className={smallBtnCls} title="A graded issue with a recommendation">
+        + Add finding
+      </button>
+      <button onClick={addObservation} className={smallBtnCls} title="A neutral note on what the imagery showed">
+        + Add observation
+      </button>
+    </div>
   );
 }
 
@@ -42,19 +59,33 @@ export function FindingsSection({ report, update }: SectionProps<PhotogrammetryR
 
   const updateFinding = (id: string, patch: Partial<PhotogrammetryFinding>) =>
     update({ findings: report.findings.map((f) => (f.id === id ? { ...f, ...patch } : f)) });
+  const updateObservation = (id: string, patch: Partial<PhotogrammetryObservation>) =>
+    update({ observations: report.observations.map((o) => (o.id === id ? { ...o, ...patch } : o)) });
 
   const figureLabel = (i: number, caption: string, assetId: number) => {
     const name = assets.find((a) => a.id === assetId)?.fileName ?? 'missing asset';
     return `Figure ${i + 1} — ${caption.trim() || name}`;
   };
 
+  const figureOptions = (
+    <>
+      <option value="">— none —</option>
+      {queue.map((entry, i) => (
+        <option key={entry.id} value={entry.id}>
+          {figureLabel(i, entry.caption, entry.assetId)}
+        </option>
+      ))}
+    </>
+  );
+
   return (
     <div className="space-y-2">
-      {report.findings.length === 0 && (
+      {report.findings.length === 0 && report.observations.length === 0 && (
         <p className="text-[11px] text-gray-500">
-          Record what the imagery shows — structural defects, surface deterioration,
-          vegetation encroachment, erosion, obstructions — and link each finding to the
-          figure that documents it.
+          Record what the imagery shows. Add a <b>finding</b> for a graded issue —
+          structural defect, surface deterioration, vegetation encroachment, erosion,
+          obstruction — with a recommendation, or an <b>observation</b> for a neutral
+          note on the condition seen. Link each to the figure that documents it.
         </p>
       )}
       {report.findings.map((f) => (
@@ -100,12 +131,7 @@ export function FindingsSection({ report, update }: SectionProps<PhotogrammetryR
                 value={f.figureId ?? ''}
                 onChange={(e) => updateFinding(f.id, { figureId: e.target.value || null })}
               >
-                <option value="">— none —</option>
-                {queue.map((entry, i) => (
-                  <option key={entry.id} value={entry.id}>
-                    {figureLabel(i, entry.caption, entry.assetId)}
-                  </option>
-                ))}
+                {figureOptions}
               </select>
             </div>
             <div>
@@ -139,6 +165,59 @@ export function FindingsSection({ report, update }: SectionProps<PhotogrammetryR
           </div>
         </div>
       ))}
+
+      {report.observations.length > 0 && (
+        <div className="pt-1">
+          <div className="text-[11px] font-semibold text-gray-300 mb-1.5">Observations</div>
+          <div className="space-y-2">
+            {report.observations.map((o) => (
+              <div key={o.id} className="p-2.5 rounded-lg bg-gray-800/50 border border-gray-700">
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    className="w-16 px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-white font-mono"
+                    value={o.refId}
+                    onChange={(e) => updateObservation(o.id, { refId: e.target.value })}
+                  />
+                  <select
+                    className="flex-1 px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-white"
+                    value={o.figureId ?? ''}
+                    onChange={(e) => updateObservation(o.id, { figureId: e.target.value || null })}
+                    title="Documented in figure"
+                  >
+                    {figureOptions}
+                  </select>
+                  <button
+                    onClick={() => update({ observations: report.observations.filter((x) => x.id !== o.id) })}
+                    className="text-gray-500 hover:text-red-400 text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className={labelCls}>Location</label>
+                    <input
+                      className={inputCls}
+                      value={o.location}
+                      onChange={(e) => updateObservation(o.id, { location: e.target.value })}
+                      placeholder="South slope, bay 3"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className={labelCls}>Observation</label>
+                    <textarea
+                      className={`${inputCls} min-h-[48px]`}
+                      value={o.text}
+                      onChange={(e) => updateObservation(o.id, { text: e.target.value })}
+                      placeholder="Membrane appears recently replaced; no ponding visible at time of survey"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

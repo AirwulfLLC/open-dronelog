@@ -476,6 +476,17 @@ export interface PhotogrammetryFinding {
   recommendation: string;
 }
 
+/** A neutral note on what the survey showed — context or condition recorded
+ *  without a defect grade or corrective action (those are findings). */
+export interface PhotogrammetryObservation {
+  id: string;
+  refId: string; // e.g. "O-01"
+  /** PhotogrammetryEntry.id of the figure that shows it. */
+  figureId: string | null;
+  location: string;
+  text: string;
+}
+
 export interface PhotogrammetryReport extends ReportBase {
   kind: 'photogrammetry';
   projectName: string;
@@ -488,6 +499,7 @@ export interface PhotogrammetryReport extends ReportBase {
   /** Imported Metashape deliverables (asset ids) listed in the Outputs section. */
   outputAssetIds: number[];
   findings: PhotogrammetryFinding[];
+  observations: PhotogrammetryObservation[];
   conclusions: string;
 }
 
@@ -522,6 +534,7 @@ export const EMPTY_PHOTOGRAMMETRY_REPORT: PhotogrammetryReport = {
   figures: [],
   outputAssetIds: [],
   findings: [],
+  observations: [],
   conclusions: '',
 };
 

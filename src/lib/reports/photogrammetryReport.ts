@@ -104,9 +104,10 @@ export function renderPhotogrammetryReport(
 
   // ---- Findings ----
   w.sectionHeading('Findings & Observations');
-  if (report.findings.length === 0) {
-    w.paragraph('No findings recorded.');
-  } else {
+  if (report.findings.length === 0 && report.observations.length === 0) {
+    w.paragraph('No findings or observations recorded.');
+  }
+  if (report.findings.length > 0) {
     // Observations and recommendations follow as detail paragraphs, so the
     // table stays an index (like the thermal anomaly log)
     w.table(
@@ -137,6 +138,28 @@ export function renderPhotogrammetryReport(
           size: 9,
         });
       }
+    });
+  }
+
+  // ---- Observations (neutral notes, no grade) ----
+  if (report.observations.length > 0) {
+    w.subheading('Observations');
+    w.table(
+      [
+        { label: 'ID', w: 14 },
+        { label: 'Figure', w: 18 },
+        { label: 'Location', w: 146 },
+      ],
+      report.observations.map((o, i) => [
+        o.refId,
+        figureRef(report, o.figureId),
+        { text: o.location, edit: edit(`observations.${i}.location`, true) },
+      ]),
+    );
+    report.observations.forEach((o, i) => {
+      if (!o.text.trim() && !w.editable) return;
+      w.boldLine(`${o.refId} — Observation`);
+      w.paragraph(o.text, { edit: edit(`observations.${i}.text`), hint: 'What the imagery showed…', size: 9 });
     });
   }
 

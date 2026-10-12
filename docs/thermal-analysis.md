@@ -276,7 +276,9 @@ kind's module under `src/lib/reports/`.
 7. **Findings & Observations** — numbered findings with category
    (structural defect, surface deterioration, vegetation, erosion/drainage,
    obstruction, survey note), severity, location, linked figure, observation
-   and recommendation.
+   and recommendation; plus **observations** (`+ Add observation`) — neutral,
+   ungraded notes on what the imagery showed, with location and linked
+   figure, listed after the findings.
 8. **Conclusions & Recommendations** — narrative plus the severity summary.
 
 Reports are saved per profile and export as **PDF** (A4, paginated, with
