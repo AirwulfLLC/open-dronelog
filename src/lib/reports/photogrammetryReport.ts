@@ -106,14 +106,15 @@ export async function buildPhotogrammetryReportPdf(
   if (report.findings.length === 0) {
     w.paragraph('No findings recorded.');
   } else {
+    // Observations and recommendations follow as detail paragraphs, so the
+    // table stays an index (like the thermal anomaly log)
     w.table(
       [
         { label: 'ID', w: 14 },
         { label: 'Figure', w: 18 },
-        { label: 'Location', w: 50 },
-        { label: 'Category', w: 44 },
-        { label: 'Severity', w: 18 },
-        { label: 'Observation', w: 34 },
+        { label: 'Location', w: 70 },
+        { label: 'Category', w: 56 },
+        { label: 'Severity', w: 20 },
       ],
       report.findings.map((f) => [
         f.refId,
@@ -121,7 +122,6 @@ export async function buildPhotogrammetryReportPdf(
         f.location,
         PHOTO_FINDING_CATEGORIES[f.category] ?? f.category,
         SEVERITY_LABELS[f.severity] ?? f.severity,
-        f.observation,
       ]),
     );
     for (const f of report.findings) {

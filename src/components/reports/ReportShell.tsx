@@ -24,8 +24,9 @@ export interface ReportShellProps<R extends ReportBase> {
   sections: ReportSectionDef<R>[];
   /** Turn stored JSON (possibly from an older version) into a valid report. */
   normalize: (parsed: Record<string, unknown>) => R;
-  /** Side effects of loading a saved report (e.g. restoring a shared queue). */
-  onLoaded?: (parsed: Record<string, unknown>) => void;
+  /** Side effects of loading a saved report (e.g. restoring a shared queue).
+   *  A returned string is shown to the user as a notice. */
+  onLoaded?: (parsed: Record<string, unknown>) => string | void;
   /** Inject live data right before save/export. */
   serialize: (report: R) => R;
   /** Asset ids an inspection bundle must carry for this report. */
@@ -101,14 +102,16 @@ export function ReportShell<R extends ReportBase>({
   };
 
   const handleLoad = async (meta: ThermalReportMeta) => {
+    if (busy) return; // two quick clicks must not race two loads
     setBusy('load');
     try {
       const json = await thermalApi.getThermalReport(meta.id);
       const parsed = JSON.parse(json) as Record<string, unknown>;
-      onLoaded?.(parsed);
+      const message = onLoaded?.(parsed);
       setReport(normalize(parsed));
       setReportName(meta.name);
       setReportId(meta.id);
+      setNotice(typeof message === 'string' ? message : null);
     } catch (e) {
       setNotice(`Load failed: ${e instanceof Error ? e.message : e}`);
     } finally {
@@ -117,6 +120,7 @@ export function ReportShell<R extends ReportBase>({
   };
 
   const handleDeleteSaved = async (meta: ThermalReportMeta) => {
+    if (busy) return;
     if (!window.confirm(`Delete saved report "${meta.name}"?`)) return;
     try {
       await thermalApi.deleteThermalReport(meta.id);

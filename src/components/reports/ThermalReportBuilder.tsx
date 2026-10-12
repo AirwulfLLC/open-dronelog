@@ -53,12 +53,22 @@ function emptyThermalReport(): ThermalReport {
   return { ...EMPTY_THERMAL_REPORT, inspectionDate: new Date().toISOString().slice(0, 10) };
 }
 
-/** Stored JSON → current shape. Reports saved before the workflows were split
- *  may carry a `photogrammetry` figure list; it belongs to the other kind. */
+/** Stored JSON → current shape. Fields this workflow no longer knows (e.g. the
+ *  `photogrammetry` figures of reports saved by the earlier combined builder)
+ *  ride along untouched, so re-saving never destroys them. */
 function normalizeThermal(parsed: Record<string, unknown>): ThermalReport {
-  const { photogrammetry: _legacyFigures, ...rest } = parsed;
-  void _legacyFigures;
-  return { ...EMPTY_THERMAL_REPORT, ...(rest as Partial<ThermalReport>), kind: 'thermal' };
+  return { ...EMPTY_THERMAL_REPORT, ...(parsed as Partial<ThermalReport>), kind: 'thermal' };
+}
+
+/** Tell the user when a loaded report carries figures this workflow cannot show. */
+function legacyFiguresNotice(parsed: Record<string, unknown>): string | void {
+  const legacy = parsed.photogrammetry;
+  if (!Array.isArray(legacy) || legacy.length === 0) return;
+  return (
+    `This report was saved by the earlier combined builder and holds ${legacy.length} photogrammetry ` +
+    'figure(s). They stay in the saved document but the thermal report no longer exports them — ' +
+    'build a Photogrammetry Survey Report from the Photogrammetry tab to include them.'
+  );
 }
 
 interface Props {
@@ -157,6 +167,7 @@ export function ThermalReportBuilder({ onClose, exportComposedImage }: Props) {
       empty={emptyThermalReport}
       sections={THERMAL_SECTIONS}
       normalize={normalizeThermal}
+      onLoaded={legacyFiguresNotice}
       serialize={(r) => r}
       referencedAssetIds={referencedAssetIds}
       buildPdf={buildPdf}

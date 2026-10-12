@@ -289,10 +289,11 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
     }
   }, [draft, setAnnotations]);
 
-  // Delete/Backspace removes the selected annotation (outside text fields)
+  // Delete/Backspace removes the selected annotation (outside text fields);
+  // Escape deselects — the only way over a video, where empty areas pass the
+  // pointer through to the player
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       const target = e.target as HTMLElement | null;
       if (
         target &&
@@ -303,6 +304,11 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
       ) {
         return;
       }
+      if (e.key === 'Escape') {
+        setSelectedAnnId(null);
+        return;
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       if (selectedAnnId) {
         setAnnotations(annotations.filter((a) => a.id !== selectedAnnId));
         setSelectedAnnId(null);

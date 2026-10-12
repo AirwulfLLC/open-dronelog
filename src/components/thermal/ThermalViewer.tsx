@@ -503,10 +503,11 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     }
   }, [draft, setAnnotations, conductorDraft, dims.w, addNetConductor, setNetwork]);
 
-  // Delete key removes the selected network element or annotation
+  // Delete key removes the selected network element or annotation; Escape
+  // deselects (the only way to deselect over a video, where empty areas pass
+  // the pointer through to the player)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       const target = e.target as HTMLElement | null;
       if (
         target &&
@@ -517,6 +518,12 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
       ) {
         return;
       }
+      if (e.key === 'Escape') {
+        setSelectedAnnId(null);
+        if (selectedNetElement) selectNetElement(null);
+        return;
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       if (selectedNetElement) {
         removeNetElement(selectedNetElement.type, selectedNetElement.id);
         return;
@@ -528,7 +535,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [annotations, selectedAnnId, setAnnotations, selectedNetElement, removeNetElement]);
+  }, [annotations, selectedAnnId, setAnnotations, selectedNetElement, removeNetElement, selectNetElement]);
 
   // ---- Export composed image (thermal render + annotations baked in) ----
   useEffect(() => {

@@ -231,7 +231,9 @@ export function pdfFigures(w: PdfWriter, figures: PhotogrammetryFigure[], title:
       imgW = imgH / aspect;
     }
     const caption = `Figure ${i + 1}. ${fig.caption.trim() || 'Untitled'}`;
-    const captionLines = (w.doc.splitTextToSize(caption, w.contentW) as string[]).length;
+    // Measure in the font subheading() will draw with (bold 10pt), not whatever
+    // the previous helper left selected
+    const captionLines = w.lineCount(caption, 10, true);
     w.checkPage(imgH + 13 + captionLines * 5);
     w.subheading(caption);
     const x = w.margin + (w.contentW - imgW) / 2;

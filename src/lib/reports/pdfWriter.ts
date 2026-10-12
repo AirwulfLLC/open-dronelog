@@ -117,11 +117,19 @@ export class PdfWriter {
     doc.setTextColor(...color);
     const lines = doc.splitTextToSize(text, this.contentW) as string[];
     for (const line of lines) {
-      this.checkPage(lineH + 0.5);
+      this.checkPage(Math.max(5, lineH));
       doc.text(line, this.margin, this.y);
       this.y += lineH;
     }
     doc.setTextColor(0, 0, 0);
+  }
+
+  /** Number of wrapped lines `text` takes at the given font — and leaves that
+   *  font selected, so a following draw call measures and draws alike. */
+  lineCount(text: string, size: number, bold = false): number {
+    this.doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    this.doc.setFontSize(size);
+    return (this.doc.splitTextToSize(text, this.contentW) as string[]).length;
   }
 
   /** Gray 8pt detail line(s). */

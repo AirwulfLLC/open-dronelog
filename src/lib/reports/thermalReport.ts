@@ -71,11 +71,9 @@ export async function buildThermalReportPdf(
     const colW = (w.contentW - 6) / 2;
     const imgH = colW * 0.75;
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    const titleLines = (doc.splitTextToSize(`${i + 1}. ${entry.caption || 'Imaging pair'}`, w.contentW) as string[]).length;
-    w.checkPage(imgH + 21 + titleLines * 5);
-    w.subheading(`${i + 1}. ${entry.caption || 'Imaging pair'}`);
+    const pairTitle = `${i + 1}. ${entry.caption || 'Imaging pair'}`;
+    w.checkPage(imgH + 21 + w.lineCount(pairTitle, 10, true) * 5);
+    w.subheading(pairTitle);
 
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');

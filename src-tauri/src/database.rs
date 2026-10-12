@@ -2881,12 +2881,14 @@ impl Database {
     }
 
     /// The report workflow a stored document belongs to, read from its JSON
-    /// (`"kind"`); documents without one are thermal inspection reports.
+    /// (`"kind"`). Documents without one — or with a kind no workflow knows,
+    /// which would otherwise be listed nowhere — are thermal inspection reports.
     fn report_kind_of(report_json: &str) -> String {
+        const KNOWN: [&str; 2] = ["thermal", "photogrammetry"];
         serde_json::from_str::<serde_json::Value>(report_json)
             .ok()
-            .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string))
-            .filter(|k| !k.is_empty())
+            .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(|k| k.trim().to_ascii_lowercase()))
+            .filter(|k| KNOWN.contains(&k.as_str()))
             .unwrap_or_else(|| "thermal".to_string())
     }
 
