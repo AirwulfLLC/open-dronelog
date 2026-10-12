@@ -31,6 +31,19 @@ export function AnnotationShape({ a, selected }: { a: Annotation; selected: bool
         </g>
       );
     }
+    case 'line':
+      return (
+        <line
+          x1={a.x1}
+          y1={a.y1}
+          x2={a.x2}
+          y2={a.y2}
+          stroke={a.color}
+          strokeWidth={a.strokeWidth}
+          strokeLinecap="round"
+          style={highlight}
+        />
+      );
     case 'text':
       return (
         <text
@@ -98,6 +111,7 @@ export function AnnotationShape({ a, selected }: { a: Annotation; selected: bool
 export function translateAnnotation(a: Annotation, dx: number, dy: number): Annotation {
   switch (a.type) {
     case 'arrow':
+    case 'line':
       return { ...a, x1: a.x1 + dx, y1: a.y1 + dy, x2: a.x2 + dx, y2: a.y2 + dy };
     case 'text':
       return { ...a, x: a.x + dx, y: a.y + dy };
@@ -118,6 +132,7 @@ export function hitTest(a: Annotation, pt: { x: number; y: number }, tolerance: 
   const tol = Math.max(6, tolerance);
   switch (a.type) {
     case 'arrow':
+    case 'line':
       return distToSegment(pt, { x: a.x1, y: a.y1 }, { x: a.x2, y: a.y2 }) < tol;
     case 'text': {
       const w = a.text.length * a.fontSize * 0.6;
@@ -260,7 +275,7 @@ function eraseFromStroke(
 /** True for a click-without-drag shape that should be discarded. */
 export function isDegenerateAnnotation(a: Annotation): boolean {
   return (
-    (a.type === 'arrow' && Math.hypot(a.x2 - a.x1, a.y2 - a.y1) < 3) ||
+    ((a.type === 'arrow' || a.type === 'line') && Math.hypot(a.x2 - a.x1, a.y2 - a.y1) < 3) ||
     (a.type === 'freehand' && a.points.length < 6) ||
     (a.type === 'circle' && a.rx < 2 && a.ry < 2) ||
     (a.type === 'rect' && a.w < 3 && a.h < 3)
@@ -295,6 +310,13 @@ export function drawAnnotationsToCanvas(ctx: CanvasRenderingContext2D, annotatio
         );
         ctx.closePath();
         ctx.fill();
+        break;
+      }
+      case 'line': {
+        ctx.beginPath();
+        ctx.moveTo(a.x1, a.y1);
+        ctx.lineTo(a.x2, a.y2);
+        ctx.stroke();
         break;
       }
       case 'text': {

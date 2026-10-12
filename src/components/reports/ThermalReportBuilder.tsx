@@ -31,7 +31,16 @@ const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
     Component: (p: SectionProps<ThermalReport>) => <HeaderSection {...p} labels={THERMAL_HEADER_LABELS} />,
   },
   { key: 'flights', title: 'Flight Data (DJI)', Component: FlightDataSection },
-  { key: 'ortho', title: 'Orthomosaic (Agisoft Metashape)', Component: OrthomosaicSection },
+  {
+    key: 'ortho',
+    title: 'Orthomosaic (Agisoft Metashape)',
+    Component: (p: SectionProps<ThermalReport>) => (
+      <OrthomosaicSection
+        {...p}
+        importHint="Import a Metashape orthomosaic (GeoTIFF) into the Thermal Studio asset library to embed it here. Processing reports, camera files and point clouds can also be imported — they travel with exported inspection bundles."
+      />
+    ),
+  },
   {
     key: 'imaging',
     title: 'Thermal Imaging Log / Comparative Matrix',

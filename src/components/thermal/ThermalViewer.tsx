@@ -198,6 +198,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
           const a = d.annotation;
           switch (a.type) {
             case 'arrow':
+            case 'line':
               return { annotation: { ...a, x2: pt.x, y2: pt.y } };
             case 'freehand':
               return { annotation: { ...a, points: [...a.points, pt.x, pt.y] } };
@@ -303,6 +304,9 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
       switch (annotationTool) {
         case 'arrow':
           annotation = { ...base, type: 'arrow', x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
+          break;
+        case 'line':
+          annotation = { ...base, type: 'line', x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
           break;
         case 'freehand':
           annotation = { ...base, type: 'freehand', points: [pt.x, pt.y] };
@@ -458,7 +462,7 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
       // Discard degenerate shapes (tiny click without drag)
       const a = draft.annotation;
       const tooSmall =
-        (a.type === 'arrow' && Math.hypot(a.x2 - a.x1, a.y2 - a.y1) < 3) ||
+        ((a.type === 'arrow' || a.type === 'line') && Math.hypot(a.x2 - a.x1, a.y2 - a.y1) < 3) ||
         (a.type === 'freehand' && a.points.length < 6) ||
         (a.type === 'circle' && a.rx < 2 && a.ry < 2) ||
         (a.type === 'rect' && a.w < 3 && a.h < 3);

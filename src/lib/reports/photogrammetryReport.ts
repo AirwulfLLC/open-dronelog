@@ -39,7 +39,7 @@ export interface MetashapeOutputSummary {
 export interface PhotogrammetryReportExtras extends OrthoExtras {
   /** Composed figures in report order. */
   figures: PhotogrammetryFigure[];
-  /** Imported Metashape deliverables (orthomosaics, reports, point clouds…). */
+  /** The Metashape deliverables selected for this report (orthomosaics, reports, point clouds…). */
   metashapeOutputs: MetashapeOutputSummary[];
 }
 
@@ -91,7 +91,7 @@ export async function buildPhotogrammetryReportPdf(
       w.paragraph(report.processingNotes);
     }
     if (extras.metashapeOutputs.length > 0) {
-      w.subheading('Imported deliverables');
+      w.subheading('Deliverables');
       for (const o of extras.metashapeOutputs) {
         w.lines(`${o.fileName} — ${o.kindLabel}${o.details ? ` · ${o.details}` : ''}`, 8.5, 4.2);
       }
@@ -183,7 +183,7 @@ export function buildPhotogrammetryReportRtf(
       w.para(report.processingNotes);
     }
     if (extras.metashapeOutputs.length > 0) {
-      w.sub('Imported deliverables');
+      w.sub('Deliverables');
       for (const o of extras.metashapeOutputs) {
         w.kv(o.fileName, `${o.kindLabel}${o.details ? ` · ${o.details}` : ''}`);
       }

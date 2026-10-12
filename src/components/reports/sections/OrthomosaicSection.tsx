@@ -1,8 +1,10 @@
 /**
  * Embedded Metashape orthomosaic + external map link (shared by both kinds).
+ * The import hint names the workflow's own library; extra kind-specific
+ * controls (e.g. the deliverables list) render below via `children`.
  */
 
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useThermalStore } from '@/stores/thermalStore';
 import {
   METASHAPE_KIND_LABELS,
@@ -12,7 +14,13 @@ import {
 } from '@/types/thermal';
 import { inputCls, labelCls, type SectionProps } from '../types';
 
-export function OrthomosaicSection({ report, update }: SectionProps<ReportBase>) {
+interface Props extends SectionProps<ReportBase> {
+  /** Shown when no orthomosaic is in the library yet. */
+  importHint: string;
+  children?: ReactNode;
+}
+
+export function OrthomosaicSection({ report, update, importHint, children }: Props) {
   const assets = useThermalStore((s) => s.assets);
   const orthoAssets = useMemo(
     () => assets.filter((a) => a.source === 'metashape' && hasDisplayableImage(a)),
@@ -24,11 +32,7 @@ export function OrthomosaicSection({ report, update }: SectionProps<ReportBase>)
   return (
     <>
       {orthoAssets.length === 0 ? (
-        <p className="text-[11px] text-gray-500">
-          Import a Metashape orthomosaic (GeoTIFF) into the Thermal Studio asset library
-          to embed it here. Processing reports, camera files and point clouds can also be
-          imported — they travel with exported inspection bundles.
-        </p>
+        <p className="text-[11px] text-gray-500">{importHint}</p>
       ) : (
         <div className="grid grid-cols-2 gap-2">
           <div>
@@ -56,7 +60,7 @@ export function OrthomosaicSection({ report, update }: SectionProps<ReportBase>)
         </div>
       )}
       <div className="mt-2">
-        <label className={labelCls}>Orthomosaic map link (e.g. hosted DJI Terra / Metashape output)</label>
+        <label className={labelCls}>Orthomosaic map link (hosted Metashape / web map output)</label>
         <input
           className={inputCls}
           value={report.orthomosaicLink}
@@ -64,6 +68,7 @@ export function OrthomosaicSection({ report, update }: SectionProps<ReportBase>)
           placeholder="https://…/stitched-map"
         />
       </div>
+      {children}
     </>
   );
 }

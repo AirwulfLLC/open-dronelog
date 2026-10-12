@@ -260,6 +260,12 @@ fn remap_report_ids(report: &mut serde_json::Value, map: &std::collections::Hash
     if let Some(v) = report.get_mut("orthoAssetId") {
         remap(v);
     }
+    // Photogrammetry report: deliverables listed in its Outputs section
+    if let Some(ids) = report.get_mut("outputAssetIds").and_then(|v| v.as_array_mut()) {
+        for v in ids.iter_mut() {
+            remap(v);
+        }
+    }
 }
 
 /// Import an .odlbundle file: recreate assets (deduplicated by hash),
@@ -530,6 +536,7 @@ mod tests {
                 { "id": "p2", "assetId": 3, "caption": "", "frameTimeS": 4.5 }
             ],
             "figures": [{ "id": "g1", "assetId": 1, "caption": "" }],
+            "outputAssetIds": [2, 3],
             "orthoAssetId": 4
         });
         let map: HashMap<i64, i64> = [(1, 10), (2, 20), (4, 40)].into_iter().collect();
@@ -542,6 +549,8 @@ mod tests {
         assert!(report["photogrammetry"][1]["assetId"].is_null());
         assert_eq!(report["photogrammetry"][1]["frameTimeS"], 4.5);
         assert_eq!(report["figures"][0]["assetId"], 10);
+        assert_eq!(report["outputAssetIds"][0], 20);
+        assert!(report["outputAssetIds"][1].is_null());
         assert_eq!(report["orthoAssetId"], 40);
     }
 }

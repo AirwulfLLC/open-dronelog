@@ -133,6 +133,7 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
           if (!a) return a;
           switch (a.type) {
             case 'arrow':
+            case 'line':
               return { ...a, x2: pt.x, y2: pt.y };
             case 'freehand':
               return { ...a, points: [...a.points, pt.x, pt.y] };
@@ -210,6 +211,9 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
       switch (annotationTool) {
         case 'arrow':
           annotation = { ...base, type: 'arrow', x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
+          break;
+        case 'line':
+          annotation = { ...base, type: 'line', x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
           break;
         case 'freehand':
           annotation = { ...base, type: 'freehand', points: [pt.x, pt.y] };

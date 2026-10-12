@@ -19,7 +19,7 @@ import type {
   ThermalNetworkModel,
   ThermalSdkStatus,
 } from '@/types/thermal';
-import { EMPTY_NETWORK, assetMimeType, hasDisplayableImage, valueSuffixFor } from '@/types/thermal';
+import { EMPTY_NETWORK, hasDisplayableImage, previewMimeType, valueSuffixFor } from '@/types/thermal';
 import * as thermalApi from '@/lib/thermalApi';
 import { makeDebouncedPersister } from '@/lib/debouncedPersister';
 
@@ -72,6 +72,11 @@ interface ThermalState {
   setAnnotationTool: (tool: AnnotationTool) => void;
   setAnnotationStyle: (color?: string, strokeWidth?: number) => void;
   setAnnotations: (annotations: Annotation[], persist?: boolean) => void;
+  /** Write pending annotation edits; resolves once they are in the database. */
+  flushAnnotations: () => Promise<void>;
+  /** Re-read the selected asset's annotations — Metashape assets are shared
+   *  with the Photogrammetry tab, which may have edited them meanwhile. */
+  refreshAnnotations: () => Promise<void>;
   clearError: () => void;
   setNetwork: (network: ThermalNetworkModel, persist?: boolean) => void;
   addNetNode: (node: NetNode) => void;
@@ -245,11 +250,7 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
         // Bail if the user already switched to another asset — a stale loser
         // must never revoke the winner's live object URL or overwrite its state.
         if (get().selectedAssetId !== assetId) return;
-        const mime =
-          asset.source === 'metashape' && asset.assetType === 'image'
-            ? 'image/png'
-            : assetMimeType(asset);
-        const assetUrl = replaceObjectUrl(fileBytes, mime);
+        const assetUrl = replaceObjectUrl(fileBytes, previewMimeType(asset));
         set({ assetUrl });
       }
 
@@ -402,6 +403,24 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
     const assetId = get().selectedAssetId;
     if (persist && assetId != null) {
       annotationsPersister.schedule({ assetId, json: JSON.stringify(annotations) });
+    }
+  },
+
+  flushAnnotations: () => annotationsPersister.flush(),
+
+  refreshAnnotations: async () => {
+    const assetId = get().selectedAssetId;
+    if (assetId == null) return;
+    const before = get().annotations;
+    try {
+      const json = await thermalApi.getThermalAnnotations(assetId);
+      // Neither a selection change nor an edit made during the read may be
+      // overwritten by the stored copy.
+      if (get().selectedAssetId !== assetId || get().annotations !== before) return;
+      const parsed: unknown = json ? JSON.parse(json) : [];
+      set({ annotations: Array.isArray(parsed) ? (parsed as Annotation[]) : [] });
+    } catch {
+      // keep the in-memory list
     }
   },
 

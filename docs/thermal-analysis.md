@@ -143,7 +143,7 @@ representing heat flow paths between computation points:
 
 ### Annotations
 
-Arrow, text, freehand, ellipse and rectangle tools, an **eraser** (drag over
+Arrow, straight line, text, freehand, ellipse and rectangle tools, an **eraser** (drag over
 annotations: shapes and labels are removed whole, freehand strokes are cut
 where the eraser passes and split into the remaining pieces), select/move,
 undo, clear, and Delete-key removal. Colors come from preset swatches or a
@@ -153,11 +153,13 @@ asset in the profile database and are baked into report exports.
 
 ### Photogrammetry tab (report imagery)
 
-The **Photogrammetry** dashboard tab assembles the visual imagery of an
-inspection report. It has its own library (photos `.jpg`/`.png`, videos
-`.mp4`/`.mov`/`.avi`; imported by file dialog or drag-and-drop) kept separate
-from the thermal assets, the same annotation tools as the Thermal Studio, and
-a **Report images** queue:
+The **Photogrammetry** dashboard tab assembles the imagery of a photogrammetry
+survey report. It has its own library of photos (`.jpg`/`.png`) and videos
+(`.mp4`/`.mov`/`.avi`) kept separate from the thermal assets, plus the Agisoft
+Metashape deliverables (orthomosaic GeoTIFFs, processing PDFs, camera
+XML/CSV, point clouds, KML/KMZ — shared with the Thermal Studio), all imported
+by file dialog or drag-and-drop; the same annotation tools as the Thermal
+Studio; and a **Report images** queue:
 
 - **Select and add** — check one or more library items (or just select one)
   and press **Add to report**; each becomes a numbered figure. The queue
@@ -259,7 +261,9 @@ kind's module under `src/lib/reports/`.
 2. **Survey Scope** — objective, area of interest, accuracy, deliverables.
 3. **Flight Data (DJI)** — as above.
 4. **Photogrammetry Outputs (Agisoft Metashape)** — embedded orthomosaic +
-   link; every imported Metashape deliverable is listed automatically.
+   link, and a checklist of the imported Metashape deliverables to list in
+   the report (the library is shared with the Thermal Studio, so only ticked
+   files appear and travel in the report's bundle).
 5. **Processing Notes** — software, alignment, GSD, control points, CRS.
 6. **Survey Imagery** — the Photogrammetry tab's queued figures in queue
    order, each with annotations, caption and provenance line (file, capture

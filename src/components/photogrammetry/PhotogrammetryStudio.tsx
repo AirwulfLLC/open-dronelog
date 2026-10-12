@@ -16,12 +16,20 @@ import { isWebMode } from '@/lib/api';
 import { fmtFrameTime } from '@/lib/photogrammetryExport';
 import { PhotogrammetryReportBuilder } from '@/components/reports/PhotogrammetryReportBuilder';
 import { ColorPicker } from '@/components/thermal/ColorPicker';
+import { MetashapeDocCard } from '@/components/thermal/MetashapeDocCard';
 import { PhotoViewer } from './PhotoViewer';
-import type { PhotogrammetryEntry, ThermalAsset } from '@/types/thermal';
+import {
+  METASHAPE_KIND_LABELS,
+  hasDisplayableImage,
+  parseMetashapeMeta,
+  type PhotogrammetryEntry,
+  type ThermalAsset,
+} from '@/types/thermal';
 
 const TOOLS: Array<{ key: PhotoTool; label: string; icon: string; title: string }> = [
   { key: 'select', label: 'Select', icon: '↖', title: 'Select / move annotations (Del to remove)' },
   { key: 'arrow', label: 'Arrow', icon: '→', title: 'Draw arrow' },
+  { key: 'line', label: 'Line', icon: '╲', title: 'Draw straight line' },
   { key: 'circle', label: 'Circle', icon: '◯', title: 'Draw ellipse' },
   { key: 'rect', label: 'Box', icon: '▭', title: 'Draw rectangle' },
   { key: 'freehand', label: 'Draw', icon: '✎', title: 'Freehand drawing' },
@@ -29,9 +37,32 @@ const TOOLS: Array<{ key: PhotoTool; label: string; icon: string; title: string 
   { key: 'eraser', label: 'Erase', icon: '⌫', title: 'Eraser — drag over annotations to remove them (freehand strokes are cut, shapes and labels removed)' },
 ];
 
-const MEDIA_EXTS = new Set(['jpg', 'jpeg', 'png', 'mp4', 'mov', 'avi']);
+// Photos/videos plus Agisoft Metashape exports. `.csv` is left out of native
+// drops so camera-reference files meant for the flight importer pass by.
+const DROP_EXTS = new Set([
+  'jpg', 'jpeg', 'png', 'mp4', 'mov', 'avi',
+  'tif', 'tiff', 'pdf', 'xml', 'las', 'laz', 'ply', 'obj', 'kml', 'kmz',
+]);
 
-type LibraryFilter = 'all' | 'image' | 'video';
+type LibraryFilter = 'all' | 'image' | 'video' | 'metashape';
+
+function assetIcon(asset: ThermalAsset): string {
+  if (asset.source === 'metashape') return asset.assetType === 'image' ? '🗺️' : '📄';
+  return asset.assetType === 'video' ? '🎬' : '📷';
+}
+
+function assetSubtitle(asset: ThermalAsset): string {
+  if (asset.source === 'metashape') {
+    const meta = parseMetashapeMeta(asset);
+    return meta ? METASHAPE_KIND_LABELS[meta.kind] ?? meta.kind : 'Metashape export';
+  }
+  return asset.assetType === 'video' ? 'Video' : 'Photo';
+}
+
+/** Photos, orthomosaic previews and videos can become report figures; documents cannot. */
+function canQueue(asset: ThermalAsset): boolean {
+  return asset.assetType === 'video' || hasDisplayableImage(asset);
+}
 
 export function PhotogrammetryStudio() {
   const allAssets = useThermalStore((s) => s.assets);
@@ -61,7 +92,12 @@ export function PhotogrammetryStudio() {
     updateEntry,
   } = usePhotogrammetryStore();
 
-  const assets = useMemo(() => allAssets.filter((a) => a.source === 'photogrammetry'), [allAssets]);
+  // The photogrammetry library: its own photos/videos plus the Metashape
+  // deliverables, which are shared with the Thermal Studio.
+  const assets = useMemo(
+    () => allAssets.filter((a) => a.source === 'photogrammetry' || a.source === 'metashape'),
+    [allAssets],
+  );
   const selectedAsset = assets.find((a) => a.id === selectedAssetId) ?? null;
 
   const [filter, setFilter] = useState<LibraryFilter>('all');
@@ -83,6 +119,24 @@ export function PhotogrammetryStudio() {
     if (!assetsLoaded) loadAssets();
     loadQueue();
   }, [assetsLoaded, loadAssets, loadQueue]);
+
+  // Metashape assets are shared with the Thermal Studio, which may have
+  // annotated the asset selected here while this tab was unmounted. Land both
+  // studios' pending edits, then re-read ours from the database.
+  useEffect(() => {
+    if (!isThermalSupported()) return;
+    let cancelled = false;
+    (async () => {
+      await Promise.all([
+        useThermalStore.getState().flushAnnotations(),
+        usePhotogrammetryStore.getState().flushAnnotations(),
+      ]);
+      if (!cancelled) await usePhotogrammetryStore.getState().refreshAnnotations();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Drop library selections that no longer exist (deleted assets)
   useEffect(() => {
@@ -159,7 +213,7 @@ export function PhotogrammetryStudio() {
           } else if (event.payload.type === 'drop') {
             setTauriDragActive(false);
             const paths = event.payload.paths.filter((p: string) =>
-              MEDIA_EXTS.has(p.split('.').pop()?.toLowerCase() ?? ''),
+              DROP_EXTS.has(p.split('.').pop()?.toLowerCase() ?? ''),
             );
             if (paths.length > 0) {
               void usePhotogrammetryStore.getState().importFiles(paths.map((path) => ({ path })));
@@ -206,6 +260,13 @@ export function PhotogrammetryStudio() {
       'video/mp4': ['.mp4'],
       'video/quicktime': ['.mov'],
       'video/x-msvideo': ['.avi'],
+      // Agisoft Metashape exports
+      'image/tiff': ['.tif', '.tiff'],
+      'application/pdf': ['.pdf'],
+      'text/xml': ['.xml'],
+      'text/csv': ['.csv'],
+      'application/vnd.google-earth.kml+xml': ['.kml'],
+      'application/octet-stream': ['.las', '.laz', '.ply', '.obj', '.kmz'],
     },
   });
 
@@ -232,15 +293,26 @@ export function PhotogrammetryStudio() {
     [addToReport, selectedAsset],
   );
 
-  const addIds = checked.size > 0 ? [...checked] : selectedAsset ? [selectedAsset.id] : [];
+  // Only figure-capable media can be queued: photos, orthomosaic previews, videos
+  const addCandidates = checked.size > 0 ? [...checked] : selectedAsset ? [selectedAsset.id] : [];
+  const addIds = addCandidates.filter((id) => {
+    const a = assets.find((x) => x.id === id);
+    return !!a && canQueue(a);
+  });
+  const skippedDocs = addCandidates.length - addIds.length;
   const handleAddToReport = () => {
     if (addIds.length === 0) return;
     const added = addToReport(addIds);
     setChecked(new Set());
+    const total = usePhotogrammetryStore.getState().queue.length;
+    const skipped =
+      skippedDocs > 0
+        ? ` ${skippedDocs} document(s) skipped — only photos, videos and orthomosaics can be figures.`
+        : '';
     setNotice(
       added === 0
-        ? 'Already in the report.'
-        : `Added ${added} to the report (${usePhotogrammetryStore.getState().queue.length} total).`,
+        ? `Already in the report.${skipped}`
+        : `Added ${added} to the report (${total} total).${skipped}`,
     );
   };
 
@@ -252,10 +324,18 @@ export function PhotogrammetryStudio() {
       return next;
     });
 
-  const visibleAssets = useMemo(
-    () => (filter === 'all' ? assets : assets.filter((a) => a.assetType === filter)),
-    [assets, filter],
-  );
+  const visibleAssets = useMemo(() => {
+    switch (filter) {
+      case 'image':
+        return assets.filter((a) => a.source === 'photogrammetry' && a.assetType === 'image');
+      case 'video':
+        return assets.filter((a) => a.assetType === 'video');
+      case 'metashape':
+        return assets.filter((a) => a.source === 'metashape');
+      default:
+        return assets;
+    }
+  }, [assets, filter]);
 
   const queuedCount = useMemo(() => {
     const counts = new Map<number, number>();
@@ -304,7 +384,7 @@ export function PhotogrammetryStudio() {
             disabled={isImporting}
             className="px-3 py-1.5 rounded-lg bg-drone-primary hover:bg-drone-primary/80 text-white text-xs font-medium disabled:opacity-50"
           >
-            {isImporting ? 'Importing…' : '+ Import photos / videos'}
+            {isImporting ? 'Importing…' : '+ Import photos / videos / Metashape'}
           </button>
           <button
             onClick={handleAddToReport}
@@ -312,11 +392,13 @@ export function PhotogrammetryStudio() {
             className="px-3 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-medium disabled:opacity-40"
             title={
               checked.size > 0
-                ? `Add the ${checked.size} checked item(s) to the report`
-                : 'Add the selected item to the report'
+                ? `Add the ${addIds.length} checked figure-capable item(s) to the report`
+                : selectedAsset && !canQueue(selectedAsset)
+                  ? 'Documents cannot be report figures — photos, videos and orthomosaics can'
+                  : 'Add the selected item to the report'
             }
           >
-            + Add to report{checked.size > 0 ? ` (${checked.size})` : ''}
+            + Add to report{checked.size > 0 ? ` (${addIds.length})` : ''}
           </button>
 
           <div ref={reportMenuRef} className="relative">
@@ -364,7 +446,9 @@ export function PhotogrammetryStudio() {
 
       {(isDragActive || tauriDragActive) && (
         <div className="absolute inset-0 z-50 bg-drone-primary/20 border-4 border-dashed border-drone-primary flex items-center justify-center pointer-events-none">
-          <p className="text-lg font-semibold text-white">Drop photos or videos to import</p>
+          <p className="text-lg font-semibold text-white">
+            Drop photos, videos or Metashape exports to import
+          </p>
         </div>
       )}
 
@@ -379,6 +463,7 @@ export function PhotogrammetryStudio() {
                   ['all', 'All'],
                   ['image', 'Photos'],
                   ['video', 'Videos'],
+                  ['metashape', 'Metashape'],
                 ] as Array<[LibraryFilter, string]>
               ).map(([key, label]) => (
                 <button
@@ -396,8 +481,9 @@ export function PhotogrammetryStudio() {
           <div className="flex-1 min-h-0 overflow-y-auto">
             {assets.length === 0 && (
               <div className="p-3 text-[11px] text-gray-500">
-                No photos or videos yet. Import the imagery you want in the report, then
-                select, annotate and add it in the order it should appear.
+                No imagery yet. Import the photos and videos you want in the report (and
+                any Metashape deliverables — orthomosaics, processing reports, point
+                clouds), then select, annotate and add them in the order they should appear.
               </div>
             )}
             {visibleAssets.map((a) => (
@@ -414,7 +500,8 @@ export function PhotogrammetryStudio() {
                   setNotice(added ? `"${a.fileName}" added to the report.` : 'Already in the report.');
                 }}
                 onDelete={() => {
-                  if (window.confirm(`Delete "${a.fileName}" from the photogrammetry library?`)) {
+                  const shared = a.source === 'metashape' ? ' (it is shared with the Thermal Studio)' : '';
+                  if (window.confirm(`Delete "${a.fileName}" from the library${shared}?`)) {
                     deleteAsset(a.id);
                   }
                 }}
@@ -425,7 +512,12 @@ export function PhotogrammetryStudio() {
 
         {/* Viewer */}
         <div className="flex-1 min-w-0 flex flex-col min-h-0">
-          {selectedAsset ? (
+          {selectedAsset && !canQueue(selectedAsset) ? (
+            <MetashapeDocCard
+              asset={selectedAsset}
+              bundleNote="This file is stored in the project library and travels in a survey report's bundle when it is ticked as a deliverable in the report builder."
+            />
+          ) : selectedAsset ? (
             <>
               <div className="flex items-center gap-1 px-3 py-1.5 border-b border-gray-700 bg-drone-secondary/30 flex-wrap">
                 {TOOLS.map((tool) => (
@@ -487,7 +579,7 @@ export function PhotogrammetryStudio() {
 
               <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500 flex flex-wrap gap-x-4 gap-y-0.5">
                 <span className="text-gray-300">{selectedAsset.fileName}</span>
-                <span>{selectedAsset.assetType === 'video' ? 'Video' : 'Photo'}</span>
+                <span>{assetSubtitle(selectedAsset)}</span>
                 {selectedAsset.cameraModel && <span>{selectedAsset.cameraModel}</span>}
                 {selectedAsset.gpsLat != null && selectedAsset.gpsLon != null && (
                   <span>
@@ -507,15 +599,15 @@ export function PhotogrammetryStudio() {
               <div className="text-center space-y-2 max-w-sm px-6">
                 <div className="text-3xl">📷</div>
                 <p className="text-sm text-gray-400">
-                  Import photos and videos, select one to annotate it, and add it to the
-                  report queue. The queue order is the order of figures in the exported
-                  report.
+                  Import photos, videos and Metashape deliverables, select an item to
+                  annotate it, and add it to the report queue. The queue order is the
+                  order of figures in the exported report.
                 </p>
                 <button
                   onClick={openFileDialog}
                   className="mt-2 px-4 py-2 rounded-lg bg-drone-primary hover:bg-drone-primary/80 text-white text-sm font-medium"
                 >
-                  Import photos / videos
+                  Import photos / videos / Metashape
                 </button>
               </div>
             </div>
@@ -605,30 +697,37 @@ function LibraryRow({
         selected ? 'bg-drone-primary/15 border-l-2 border-l-drone-primary' : 'hover:bg-gray-800/50'
       }`}
     >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={onToggleChecked}
-        onClick={(e) => e.stopPropagation()}
-        className="mt-0.5 accent-sky-500 flex-shrink-0"
-        title="Check several items, then “Add to report”"
-      />
+      {canQueue(asset) ? (
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onToggleChecked}
+          onClick={(e) => e.stopPropagation()}
+          className="mt-0.5 accent-sky-500 flex-shrink-0"
+          title="Check several items, then “Add to report”"
+        />
+      ) : (
+        // Documents cannot become figures; keep the row aligned
+        <span className="w-[13px] flex-shrink-0" aria-hidden="true" />
+      )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-1">
           <span className={`truncate ${selected ? 'text-white font-medium' : 'text-gray-300'}`}>
-            {asset.assetType === 'video' ? '🎬' : '📷'} {asset.fileName}
+            {assetIcon(asset)} {asset.fileName}
           </span>
           <div className="flex items-center gap-1 flex-shrink-0">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onQuickAdd();
-              }}
-              className="opacity-0 group-hover:opacity-100 text-emerald-400 hover:text-emerald-300"
-              title="Add to report"
-            >
-              +
-            </button>
+            {canQueue(asset) && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onQuickAdd();
+                }}
+                className="opacity-0 group-hover:opacity-100 text-emerald-400 hover:text-emerald-300"
+                title="Add to report"
+              >
+                +
+              </button>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -642,7 +741,7 @@ function LibraryRow({
           </div>
         </div>
         <div className="text-[10px] text-gray-500 mt-0.5 flex gap-2">
-          <span>{asset.assetType === 'video' ? 'Video' : 'Photo'}</span>
+          <span className="truncate">{assetSubtitle(asset)}</span>
           {asset.capturedAt && <span>{asset.capturedAt.split(' ')[0]}</span>}
           {queued > 0 && <span className="text-emerald-400">In report{queued > 1 ? ` ×${queued}` : ''}</span>}
         </div>
@@ -711,7 +810,7 @@ function QueueRow({
         </span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1 text-gray-300 truncate">
-            <span>{asset ? (isVideo ? '🎬' : '📷') : '⚠️'}</span>
+            <span>{asset ? assetIcon(asset) : '⚠️'}</span>
             <span className="truncate">{asset?.fileName ?? 'Asset no longer in the library'}</span>
           </div>
           {isVideo && (

@@ -6,7 +6,7 @@
 
 import * as thermalApi from '@/lib/thermalApi';
 import { drawAnnotationsToCanvas } from '@/components/thermal/annotationUtils';
-import { assetMimeType } from '@/types/thermal';
+import { previewMimeType } from '@/types/thermal';
 import type { Annotation, PhotogrammetryEntry, ThermalAsset } from '@/types/thermal';
 
 export interface PhotogrammetryFigure {
@@ -127,7 +127,8 @@ export async function composeFigure(
   const bytes = isVideo
     ? await thermalApi.readThermalAssetFile(asset.id)
     : await thermalApi.readThermalAssetPreview(asset.id);
-  const url = URL.createObjectURL(new Blob([bytes], { type: assetMimeType(asset) }));
+  // Images come from the preview endpoint (GeoTIFFs as PNG), videos as the original file
+  const url = URL.createObjectURL(new Blob([bytes], { type: previewMimeType(asset) }));
   try {
     if (isVideo) {
       const video = await seekVideoFrame(url, frameTimeS ?? 0);

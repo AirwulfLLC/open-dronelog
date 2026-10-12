@@ -33,6 +33,7 @@ import { HeaderSection } from './sections/HeaderSection';
 import { FlightDataSection } from './sections/FlightDataSection';
 import { OrthomosaicSection } from './sections/OrthomosaicSection';
 import { PhotogrammetryFiguresSection } from './sections/PhotogrammetryFiguresSection';
+import { DeliverablesSection } from './sections/DeliverablesSection';
 import { FindingsActions, FindingsSection } from './sections/FindingsSection';
 import { makeTextSection } from './sections/TextSection';
 import { inputCls, labelCls, type ReportSectionDef, type SectionProps } from './types';
@@ -57,6 +58,17 @@ function PhotogrammetryHeader(p: SectionProps<PhotogrammetryReport>) {
   );
 }
 
+function PhotogrammetryOutputs(p: SectionProps<PhotogrammetryReport>) {
+  return (
+    <OrthomosaicSection
+      {...p}
+      importHint="Import your Metashape deliverables (orthomosaic GeoTIFFs, processing reports, camera files, point clouds) into the Photogrammetry library to embed the orthomosaic here and list the deliverables in the report."
+    >
+      <DeliverablesSection {...p} />
+    </OrthomosaicSection>
+  );
+}
+
 const PHOTOGRAMMETRY_SECTIONS: ReportSectionDef<PhotogrammetryReport>[] = [
   { key: 'header', title: 'Header Data', Component: PhotogrammetryHeader },
   {
@@ -68,13 +80,12 @@ const PHOTOGRAMMETRY_SECTIONS: ReportSectionDef<PhotogrammetryReport>[] = [
     }),
   },
   { key: 'flights', title: 'Flight Data (DJI)', Component: FlightDataSection },
-  { key: 'ortho', title: 'Photogrammetry Outputs (Agisoft Metashape)', Component: OrthomosaicSection },
+  { key: 'ortho', title: 'Photogrammetry Outputs (Agisoft Metashape)', Component: PhotogrammetryOutputs },
   {
     key: 'processing',
     title: 'Processing Notes',
     Component: makeTextSection<PhotogrammetryReport>('processingNotes', {
       minHeight: 64,
-      hint: 'Imported Metashape deliverables (orthomosaics, reports, camera files, point clouds) are listed automatically in the exported report.',
       placeholder: 'Metashape 2.x · 412 images aligned (98%) · GSD 1.2 cm/px · 6 GCPs, RMSE 2.1 cm · CRS EPSG:6471',
     }),
   },
@@ -95,17 +106,24 @@ function emptyPhotogrammetryReport(): PhotogrammetryReport {
 
 /** Stored JSON → current shape; the figure list lives in the queue store. */
 function normalizePhotogrammetry(parsed: Record<string, unknown>): PhotogrammetryReport {
+  // A bundle import nulls ids whose assets were not in the bundle
+  const outputAssetIds = Array.isArray(parsed.outputAssetIds)
+    ? parsed.outputAssetIds.filter((id): id is number => typeof id === 'number')
+    : [];
   return {
     ...EMPTY_PHOTOGRAMMETRY_REPORT,
     ...(parsed as Partial<PhotogrammetryReport>),
     kind: 'photogrammetry',
     figures: [],
+    outputAssetIds,
   };
 }
 
-function metashapeOutputs(assets: ThermalAsset[]): MetashapeOutputSummary[] {
+/** The deliverables the user ticked, in library order. */
+function metashapeOutputs(assets: ThermalAsset[], selectedIds: number[]): MetashapeOutputSummary[] {
+  const selected = new Set(selectedIds);
   return assets
-    .filter((a) => a.source === 'metashape')
+    .filter((a) => a.source === 'metashape' && selected.has(a.id))
     .map((a) => {
       const m = parseMetashapeMeta(a);
       const details = [
@@ -138,7 +156,7 @@ export function PhotogrammetryReportBuilder({ onClose }: Props) {
       return {
         ...(await collectOrthoExtras(report.orthoAssetId, assets)),
         figures: await buildPhotogrammetryFigures(report.figures, assets),
-        metashapeOutputs: metashapeOutputs(assets),
+        metashapeOutputs: metashapeOutputs(assets, report.outputAssetIds),
       };
     },
     [assets],
@@ -157,7 +175,15 @@ export function PhotogrammetryReportBuilder({ onClose }: Props) {
 
   // The queue store is canonical for figures: snapshot it on save/export and
   // restore it from a loaded report (reports predating figures leave it alone).
-  const serialize = useCallback((report: PhotogrammetryReport) => ({ ...report, figures: queue }), [queue]);
+  // Deliverable ids whose assets were deleted since are pruned here.
+  const serialize = useCallback(
+    (report: PhotogrammetryReport): PhotogrammetryReport => ({
+      ...report,
+      figures: queue,
+      outputAssetIds: report.outputAssetIds.filter((id) => assets.some((a) => a.id === id)),
+    }),
+    [queue, assets],
+  );
   const onLoaded = useCallback(
     (parsed: Record<string, unknown>) => {
       const stored = parsed.figures ?? parsed.photogrammetry;
@@ -180,15 +206,16 @@ export function PhotogrammetryReportBuilder({ onClose }: Props) {
 
   const referencedAssetIds = useCallback(
     (report: PhotogrammetryReport): number[] => {
+      // Only this report's own evidence travels: its figures, the embedded
+      // orthomosaic and the deliverables the user listed — not every Metashape
+      // file in the shared library.
       const ids = new Set<number>();
       for (const f of report.figures) ids.add(f.assetId);
       if (report.orthoAssetId != null) ids.add(report.orthoAssetId);
-      for (const a of assets) {
-        if (a.source === 'metashape') ids.add(a.id);
-      }
+      for (const id of report.outputAssetIds) ids.add(id);
       return [...ids];
     },
-    [assets],
+    [],
   );
 
   return (

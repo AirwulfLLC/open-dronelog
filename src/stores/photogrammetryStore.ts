@@ -10,7 +10,7 @@
 
 import { create } from 'zustand';
 import type { Annotation, AnnotationTool, PhotogrammetryEntry } from '@/types/thermal';
-import { assetMimeType } from '@/types/thermal';
+import { hasDisplayableImage, previewMimeType } from '@/types/thermal';
 import * as thermalApi from '@/lib/thermalApi';
 import { getSettingValue, setSettingValue } from '@/lib/api';
 import { makeDebouncedPersister } from '@/lib/debouncedPersister';
@@ -23,6 +23,15 @@ export type PhotoTool = Exclude<AnnotationTool, 'node' | 'conductor'>;
 export const QUEUE_SETTING_KEY = 'photogrammetry_report_queue';
 
 type ImportFile = { name: string; bytes: Uint8Array } | { path: string };
+
+const MEDIA_EXTS = new Set(['jpg', 'jpeg', 'png', 'mp4', 'mov', 'avi']);
+
+/** Photos/videos are filed in the photogrammetry library; everything else
+ *  (Metashape exports) is auto-classified by the backend and shared. */
+function sourceFor(fileName: string): 'photogrammetry' | undefined {
+  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+  return MEDIA_EXTS.has(ext) ? 'photogrammetry' : undefined;
+}
 
 interface PhotogrammetryState {
   selectedAssetId: number | null;
@@ -48,6 +57,9 @@ interface PhotogrammetryState {
   setAnnotations: (annotations: Annotation[], persist?: boolean) => void;
   /** Write pending annotation edits; await before composing report figures. */
   flushAnnotations: () => Promise<void>;
+  /** Re-read the selected asset's annotations — Metashape assets are shared
+   *  with the Thermal Studio, which may have edited them meanwhile. */
+  refreshAnnotations: () => Promise<void>;
   /** Append assets to the report queue; returns how many entries were added.
    *  Photos are queued once; videos once per distinct frame time. */
   addToReport: (assetIds: number[], frameTimeS?: number) => number;
@@ -174,8 +186,8 @@ export const usePhotogrammetryStore = create<PhotogrammetryState>((set, get) => 
         try {
           const asset =
             'path' in f
-              ? await thermalApi.importThermalAsset(f.path, 'photogrammetry')
-              : await thermalApi.importThermalAssetBytes(f.name, f.bytes, 'photogrammetry');
+              ? await thermalApi.importThermalAsset(f.path, sourceFor(f.path))
+              : await thermalApi.importThermalAssetBytes(f.name, f.bytes, sourceFor(f.name));
           if (firstImported == null) firstImported = asset.id;
         } catch (e) {
           errors.push(e instanceof Error ? e.message : String(e));
@@ -200,6 +212,13 @@ export const usePhotogrammetryStore = create<PhotogrammetryState>((set, get) => 
       }
       const asset = useThermalStore.getState().assets.find((a) => a.id === assetId);
       if (!asset) return;
+      // Documents (PDF, camera XML, point clouds…) and GeoTIFFs without a
+      // preview show a metadata card instead of media.
+      const displayable = asset.assetType === 'video' || hasDisplayableImage(asset);
+      if (!displayable) {
+        replaceObjectUrl(null, '');
+        return;
+      }
       set({ isLoadingAsset: true });
       try {
         // Media and stored annotations arrive together: if the surface became
@@ -223,7 +242,7 @@ export const usePhotogrammetryStore = create<PhotogrammetryState>((set, get) => 
             // annotations are non-critical
           }
         }
-        set({ assetUrl: replaceObjectUrl(bytes, assetMimeType(asset)), annotations });
+        set({ assetUrl: replaceObjectUrl(bytes, previewMimeType(asset)), annotations });
       } catch (e) {
         if (get().selectedAssetId === assetId) {
           set({ error: e instanceof Error ? e.message : String(e) });
@@ -265,6 +284,22 @@ export const usePhotogrammetryStore = create<PhotogrammetryState>((set, get) => 
 
     flushAnnotations: () => annotationsPersister.flush(),
 
+    refreshAnnotations: async () => {
+      const assetId = get().selectedAssetId;
+      if (assetId == null) return;
+      const before = get().annotations;
+      try {
+        const json = await thermalApi.getThermalAnnotations(assetId);
+        // Neither a selection change nor an edit made during the read may be
+        // overwritten by the stored copy.
+        if (get().selectedAssetId !== assetId || get().annotations !== before) return;
+        const parsed: unknown = json ? JSON.parse(json) : [];
+        set({ annotations: Array.isArray(parsed) ? (parsed as Annotation[]) : [] });
+      } catch {
+        // keep the in-memory list
+      }
+    },
+
     addToReport: (assetIds, frameTimeS) => {
       const assets = useThermalStore.getState().assets;
       const queue = [...get().queue];
@@ -273,6 +308,8 @@ export const usePhotogrammetryStore = create<PhotogrammetryState>((set, get) => 
         const asset = assets.find((a) => a.id === assetId);
         if (!asset) continue;
         const isVideo = asset.assetType === 'video';
+        // Only media that can render as a figure (photos, orthomosaic previews, videos)
+        if (!isVideo && !hasDisplayableImage(asset)) continue;
         const duplicate = queue.some(
           (e) =>
             e.assetId === assetId && (!isVideo || sameFrame(e.frameTimeS, frameTimeS)),

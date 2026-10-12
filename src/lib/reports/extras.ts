@@ -4,7 +4,7 @@
  */
 
 import * as thermalApi from '@/lib/thermalApi';
-import { hasDisplayableImage, parseMetashapeMeta } from '@/types/thermal';
+import { hasDisplayableImage, parseMetashapeMeta, previewMimeType } from '@/types/thermal';
 import type { ThermalAsset } from '@/types/thermal';
 import type { OrthoExtras } from './common';
 
@@ -23,9 +23,7 @@ export async function readAssetDataUrl(asset: ThermalAsset): Promise<string | nu
   if (!hasDisplayableImage(asset)) return null;
   try {
     const buf = await thermalApi.readThermalAssetPreview(asset.id);
-    const ext = asset.fileName.toLowerCase().split('.').pop();
-    const mime = asset.source === 'metashape' || ext === 'png' ? 'image/png' : 'image/jpeg';
-    return bytesToDataUrl(buf, mime);
+    return bytesToDataUrl(buf, previewMimeType(asset));
   } catch {
     return null;
   }

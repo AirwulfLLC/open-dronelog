@@ -8,12 +8,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useThermalStore } from '@/stores/thermalStore';
+import { usePhotogrammetryStore } from '@/stores/photogrammetryStore';
 import { isThermalSupported } from '@/lib/thermalApi';
 import * as thermalApi from '@/lib/thermalApi';
 import { ThermalViewer } from './ThermalViewer';
 import { AnalysisPanel } from './AnalysisPanel';
 import { ThermalReportBuilder } from '@/components/reports/ThermalReportBuilder';
 import { ColorPicker } from './ColorPicker';
+import { MetashapeDocCard } from './MetashapeDocCard';
 import { METASHAPE_KIND_LABELS, hasDisplayableImage, parseMetashapeMeta } from '@/types/thermal';
 import { isWebMode } from '@/lib/api';
 import type { AnnotationTool, ThermalAsset } from '@/types/thermal';
@@ -21,6 +23,7 @@ import type { AnnotationTool, ThermalAsset } from '@/types/thermal';
 const TOOLS: Array<{ key: AnnotationTool; label: string; icon: string; title: string }> = [
   { key: 'select', label: 'Select', icon: '↖', title: 'Select / move annotations and nodes (Del to remove)' },
   { key: 'arrow', label: 'Arrow', icon: '→', title: 'Draw arrow' },
+  { key: 'line', label: 'Line', icon: '╲', title: 'Draw straight line' },
   { key: 'circle', label: 'Circle', icon: '◯', title: 'Draw ellipse' },
   { key: 'rect', label: 'Box', icon: '▭', title: 'Draw rectangle' },
   { key: 'freehand', label: 'Draw', icon: '✎', title: 'Freehand drawing' },
@@ -71,6 +74,24 @@ export function ThermalStudio() {
     loadSdkStatus();
     if (!assetsLoaded) loadAssets();
   }, [loadSdkStatus, loadAssets, assetsLoaded]);
+
+  // Metashape assets are shared with the Photogrammetry tab, which may have
+  // annotated the asset selected here while this studio was unmounted. Land
+  // both studios' pending edits, then re-read ours from the database.
+  useEffect(() => {
+    if (!isThermalSupported()) return;
+    let cancelled = false;
+    (async () => {
+      await Promise.all([
+        useThermalStore.getState().flushAnnotations(),
+        usePhotogrammetryStore.getState().flushAnnotations(),
+      ]);
+      if (!cancelled) await useThermalStore.getState().refreshAnnotations();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Close report menu on outside click
   useEffect(() => {
@@ -509,85 +530,3 @@ function AssetRow({
   );
 }
 
-/** Metadata card for Metashape documents (PDF reports, camera files, point clouds…). */
-function MetashapeDocCard({ asset }: { asset: ThermalAsset }) {
-  const meta = parseMetashapeMeta(asset);
-  const fmtSize = (b?: number) => {
-    if (b == null) return '—';
-    if (b >= 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
-    if (b >= 1024) return `${(b / 1024).toFixed(0)} KB`;
-    return `${b} B`;
-  };
-  return (
-    <div className="flex-1 min-h-0 flex items-center justify-center p-6">
-      <div className="max-w-md w-full p-5 rounded-xl border border-gray-700 bg-gray-800/50">
-        <div className="flex items-center gap-3 mb-3">
-          <span className="text-3xl">📄</span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-white truncate">{asset.fileName}</p>
-            <p className="text-xs text-gray-400">
-              {meta ? METASHAPE_KIND_LABELS[meta.kind] ?? meta.kind : 'Metashape export'}
-            </p>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
-          <span>Size</span>
-          <span className="text-gray-200">{fmtSize(meta?.sizeBytes)}</span>
-          {meta?.cameraCount != null && (
-            <>
-              <span>Cameras</span>
-              <span className="text-gray-200">{meta.cameraCount.toLocaleString()}</span>
-            </>
-          )}
-          {meta?.markerCount != null && (
-            <>
-              <span>Markers</span>
-              <span className="text-gray-200">{meta.markerCount}</span>
-            </>
-          )}
-          {meta?.crs && (
-            <>
-              <span>Coordinate system</span>
-              <span className="text-gray-200 truncate" title={meta.crs}>{meta.crs}</span>
-            </>
-          )}
-          {meta?.rowCount != null && (
-            <>
-              <span>Reference rows</span>
-              <span className="text-gray-200">{meta.rowCount.toLocaleString()}</span>
-            </>
-          )}
-          {meta?.format && (
-            <>
-              <span>Format</span>
-              <span className="text-gray-200 uppercase">{meta.format}</span>
-            </>
-          )}
-        </div>
-        {meta?.previewError && (
-          <p className="mt-3 text-[10px] text-amber-400/90">
-            No in-app preview could be generated for this GeoTIFF ({meta.previewError}).
-            The original file is stored and can be opened externally.
-          </p>
-        )}
-        <button
-          onClick={async () => {
-            try {
-              const { openPath } = await import('@tauri-apps/plugin-opener');
-              await openPath(asset.storedPath);
-            } catch (e) {
-              window.alert(`Could not open file: ${e instanceof Error ? e.message : e}`);
-            }
-          }}
-          className="mt-4 w-full py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium"
-        >
-          Open in default application
-        </button>
-        <p className="mt-2 text-[10px] text-gray-500">
-          This file travels with the inspection: it is stored in the project library and
-          included when exporting an inspection bundle.
-        </p>
-      </div>
-    </div>
-  );
-}

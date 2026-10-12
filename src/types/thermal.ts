@@ -106,6 +106,15 @@ export function assetMimeType(asset: ThermalAsset): string {
   return 'image/jpeg';
 }
 
+/** MIME type of the bytes the preview endpoint serves: GeoTIFF-backed
+ *  Metashape images come back as their PNG preview, everything else as the
+ *  original file. */
+export function previewMimeType(asset: ThermalAsset): string {
+  return asset.source === 'metashape' && asset.assetType === 'image'
+    ? 'image/png'
+    : assetMimeType(asset);
+}
+
 /** Unit suffix for measured values on this asset ('' for unitless indices). */
 export function valueSuffixFor(asset: ThermalAsset | null): string {
   if (!asset) return '°C';
@@ -202,6 +211,7 @@ export interface TempMatrix {
 export type AnnotationTool =
   | 'select'
   | 'arrow'
+  | 'line'
   | 'text'
   | 'freehand'
   | 'circle'
@@ -219,6 +229,15 @@ export interface AnnotationBase {
 
 export interface ArrowAnnotation extends AnnotationBase {
   type: 'arrow';
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/** Straight line without an arrow head. */
+export interface LineAnnotation extends AnnotationBase {
+  type: 'line';
   x1: number;
   y1: number;
   x2: number;
@@ -256,6 +275,7 @@ export interface RectAnnotation extends AnnotationBase {
 
 export type Annotation =
   | ArrowAnnotation
+  | LineAnnotation
   | TextAnnotation
   | FreehandAnnotation
   | CircleAnnotation
@@ -465,6 +485,8 @@ export interface PhotogrammetryReport extends ReportBase {
   processingNotes: string;
   /** Ordered figures (photos / video frames with annotations). */
   figures: PhotogrammetryEntry[];
+  /** Imported Metashape deliverables (asset ids) listed in the Outputs section. */
+  outputAssetIds: number[];
   findings: PhotogrammetryFinding[];
   conclusions: string;
 }
@@ -498,6 +520,7 @@ export const EMPTY_PHOTOGRAMMETRY_REPORT: PhotogrammetryReport = {
   surveyPurpose: '',
   processingNotes: '',
   figures: [],
+  outputAssetIds: [],
   findings: [],
   conclusions: '',
 };
