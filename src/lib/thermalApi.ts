@@ -253,6 +253,11 @@ export async function thermalAiGenerateFindings(
   return inv<string>('thermal_ai_generate_findings', { assetId, contextJson });
 }
 
+/** Text-only generation through the configured provider (report drafting). */
+export async function thermalAiGenerateText(systemPrompt: string, userText: string): Promise<string> {
+  return inv<string>('thermal_ai_generate_text', { systemPrompt, userText });
+}
+
 export async function solveThermalNetwork(
   network: ThermalNetworkModel,
   options: NetworkSolveOptions,

@@ -99,7 +99,12 @@ fn candidate_dirs() -> Vec<PathBuf> {
         dirs.push(PathBuf::from(dir));
     }
 
-    // 2. Next to the executable (release bundles place the SDK in `tsdk/`)
+    // 2. The Thermal add-on's runtime (installed by the add-on installer)
+    if let Some(dir) = crate::addons::thermal_sdk_dir_in_addons() {
+        dirs.push(dir);
+    }
+
+    // 3. Next to the executable (all-in-one bundles place the SDK in `tsdk/`)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             dirs.push(exe_dir.join("tsdk"));
@@ -107,7 +112,7 @@ fn candidate_dirs() -> Vec<PathBuf> {
         }
     }
 
-    // 3. Development checkout (repo `deps/` folder)
+    // 4. Development checkout (repo `deps/` folder)
     #[cfg(windows)]
     let platform = "windows";
     #[cfg(not(windows))]
@@ -202,6 +207,15 @@ fn sdk() -> Result<&'static SdkInner, String> {
     match SDK.get_or_init(load_sdk) {
         Ok(inner) => Ok(inner),
         Err(e) => Err(e.clone()),
+    }
+}
+
+/// Folder of the SDK currently mapped into this process, without triggering
+/// a load. Windows will not let those files be deleted until the app exits.
+pub fn loaded_sdk_dir() -> Option<PathBuf> {
+    match SDK.get() {
+        Some(Ok(inner)) => Some(inner.sdk_dir.clone()),
+        _ => None,
     }
 }
 

@@ -1,0 +1,7 @@
+{
+  "id": "thermal",
+  "name": "Thermal Analysis Studio",
+  "version": "0.0.0",
+  "description": "DJI radiometric image analysis: temperature statistics and isotherms, range isolation, AI variance analysis, heat-flow networks, Metashape orthomosaics and thermal inspection reports. Includes the DJI Thermal SDK runtime.",
+  "provides": ["thermal"]
+}

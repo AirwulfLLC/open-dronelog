@@ -62,3 +62,6 @@ opendronelog-upload.jks.b64
 deps/dji_thermal_sdk/
 dji_thermal_sdk_*.zip
 DJI+Thermal+Analysis+Tool*.exe
+
+# Add-on installer build intermediates
+installers/addons/.build/

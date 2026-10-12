@@ -1,15 +1,23 @@
 # Thermal Studio — DJI Thermal Analysis
 
-Open DroneLog's **Thermal Studio** (third tab in the sidebar view toggle) analyzes
-radiometric JPEGs (R-JPEG) captured by DJI thermal cameras — Zenmuse H20T/H20N,
-H30T, M30T, M3T/M3TD, M2EA, M4T, XT S and similar — using the official
-**DJI Thermal SDK** (`libdirp`).
+Open DroneLog's **Thermal Studio** analyzes radiometric JPEGs (R-JPEG) captured
+by DJI thermal cameras — Zenmuse H20T/H20N, H30T, M30T, M3T/M3TD, M2EA, M4T,
+XT S and similar — using the official **DJI Thermal SDK** (`libdirp`).
 
-> Thermal Studio is a **desktop-only** feature (Windows x64 / Linux x64).
-> The DJI Thermal SDK is a native library, so the web/Docker build and the
-> Android app show the thermal tab in a disabled state.
+> Thermal Studio is an **add-on** (see [add-ons.md](add-ons.md)): install the
+> Thermal add-on and its tab appears in the sidebar. It is desktop-only
+> (Windows x64 / Linux x64); the web/Docker build and the Android app have no
+> add-ons.
 
-## SDK setup
+## Installing (users)
+
+Run `OpenDroneLog-Thermal-Addon_<version>_x64-setup.exe`, then open
+**Add-ons** next to Settings and press **Refresh**. The add-on brings the DJI
+Thermal SDK runtime with it — nothing else to set up. The Thermal Studio top
+bar shows a green "DJI Thermal SDK ready" badge when the SDK is loaded, or the
+load error if not.
+
+## SDK setup (developers)
 
 The DJI Thermal SDK is proprietary and is **not** committed to this repository.
 
@@ -29,16 +37,13 @@ The DJI Thermal SDK is proprietary and is **not** committed to this repository.
 At runtime the app searches for `libdirp.dll` / `libdirp.so` in this order:
 
 1. `DJI_TSDK_DIR` environment variable
-2. a `tsdk/` folder next to the app executable (recommended for packaged builds)
-3. the app executable's own folder
-4. `deps/dji_thermal_sdk/tsdk-core/lib/<platform>/release_x64/` in the repo
+2. the Thermal add-on's runtime: `<app data dir>/addons/thermal/tsdk/`
+   (what the add-on installer installs)
+3. a `tsdk/` folder next to the app executable (all-in-one bundles built with
+   `src-tauri/tauri.thermal-sdk.conf.json`)
+4. the app executable's own folder
+5. `deps/dji_thermal_sdk/tsdk-core/lib/<platform>/release_x64/` in the repo
    (development builds)
-
-For packaged/release builds, copy the contents of
-`deps/dji_thermal_sdk/tsdk-core/lib/windows/release_x64/` (all DLLs) into a
-`tsdk` folder next to `open-dronelog.exe` (or the Linux equivalent from
-`lib/linux/release_x64/`). The Thermal Studio top bar shows a green
-"DJI Thermal SDK ready" badge when the SDK is loaded, or the load error if not.
 
 ## Features
 
@@ -280,6 +285,16 @@ kind's module under `src/lib/reports/`.
    ungraded notes on what the imagery showed, with location and linked
    figure, listed after the findings.
 8. **Conclusions & Recommendations** — narrative plus the severity summary.
+
+**✨ AI draft** — sections whose text can be composed from the data entered
+(Summary, Anomalies & Findings and Action Plan for thermal reports; Summary,
+Survey Scope, Processing Notes, Findings & Observations and Conclusions for
+photogrammetry reports) carry an *AI draft* tick in their heading. Ticking it
+sends only the facts entered in the report — never images — to the AI
+provider configured in Settings and fills the section with the reply (for
+findings and observations, each entry's text by id); untick to restore your
+own text, ↻ to regenerate. The tick is greyed out until an API key for the
+selected provider is configured in Settings (AI Thermal Analysis).
 
 Reports are saved per profile and export as **PDF** (A4, paginated, with
 embedded images and tables), **Word (.docx)** or **RTF** — all three come

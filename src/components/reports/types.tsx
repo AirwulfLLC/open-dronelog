@@ -18,6 +18,23 @@ export interface SectionProps<R> {
   setNotice: (message: string | null) => void;
 }
 
+/** How the AI drafts a section from the data entered in the report. */
+export interface SectionAi<R> {
+  /** What to write and in what form (the facts follow as JSON). */
+  instruction: (report: R) => string;
+  /** The facts the model may use — only what the user entered. */
+  facts: (report: R) => unknown;
+  /** Merge the reply into the CURRENT report state (edits made while the
+   *  model ran must survive); null when it cannot be applied. */
+  apply: (report: R, reply: string) => ReportPatch<R> | null;
+  /** The fields a draft overwrites, captured beforehand so it can be undone. */
+  snapshot: (report: R) => ReportPatch<R>;
+  /** Put the snapshot back into the CURRENT state. Defaults to spreading it;
+   *  sections holding entry lists restore per entry by id, so entries added
+   *  after the draft survive. */
+  restore?: (report: R, snapshot: ReportPatch<R>) => ReportPatch<R>;
+}
+
 export interface ReportSectionDef<R> {
   key: string;
   title: string;
@@ -25,6 +42,8 @@ export interface ReportSectionDef<R> {
   Component: React.ComponentType<SectionProps<R>>;
   /** Optional controls rendered on the right of the section heading. */
   Actions?: React.ComponentType<SectionProps<R>>;
+  /** Present when the section's text can be drafted by AI. */
+  ai?: SectionAi<R>;
 }
 
 export const inputCls =

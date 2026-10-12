@@ -12,6 +12,7 @@
     windows_subsystem = "windows"
 )]
 
+mod addons;
 mod airdata_parser;
 mod api;
 mod battery_pairs;

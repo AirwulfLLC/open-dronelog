@@ -29,7 +29,8 @@
     "context:validate": "node scripts/context/validate.mjs",
     "context:build": "node scripts/context/build.mjs",
     "context:check": "node scripts/context/check.mjs",
-    "context:install-hooks": "node scripts/context/install-hooks.mjs"
+    "context:install-hooks": "node scripts/context/install-hooks.mjs",
+    "build:addons": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-addons.ps1"
   },
   "dependencies": {
     "@deck.gl/layers": "^9.4.0",

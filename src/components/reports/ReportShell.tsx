@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as thermalApi from '@/lib/thermalApi';
+import { draftSection } from '@/lib/reports/ai';
 import { saveReportFile } from '@/lib/reports/common';
 import {
   EXPORT_FORMATS,
@@ -39,6 +40,8 @@ export interface ReportShellProps<R extends ReportBase, P> {
   title: string;
   icon: string;
   defaultName: string;
+  /** Workflow name for the AI drafting prompt ("thermal inspection"). */
+  aiWorkflow: string;
   /** A fresh report of this kind. */
   empty: () => R;
   sections: ReportSectionDef<R>[];
@@ -67,6 +70,7 @@ export function ReportShell<R extends ReportBase, P>({
   title,
   icon,
   defaultName,
+  aiWorkflow,
   empty,
   sections,
   normalize,
@@ -91,6 +95,25 @@ export function ReportShell<R extends ReportBase, P>({
   const [preview, setPreview] = useState<{ html: string; prepared: P } | null>(null);
   // Set when a preview edit changed content that `prepare` captured
   const preparedStaleRef = useRef(false);
+  /** null while unknown; false greys out AI drafting (no API key for the provider). */
+  const [aiReady, setAiReady] = useState<boolean | null>(null);
+  const [aiBusyKey, setAiBusyKey] = useState<string | null>(null);
+  /** Sections currently showing an AI draft → the user's text before it (for undo). */
+  const [aiDrafts, setAiDrafts] = useState<Record<string, ReportPatch<R>>>({});
+  // Latest state for async work (an AI reply must merge into what the user
+  // has NOW, not what they had when the request started)
+  const reportRef = useRef(report);
+  reportRef.current = report;
+  // Bumped whenever a different document is loaded; a draft started for the
+  // previous document is then discarded instead of landing in the new one
+  const documentGenRef = useRef(0);
+
+  useEffect(() => {
+    thermalApi
+      .thermalAiHasApiKey()
+      .then(setAiReady)
+      .catch(() => setAiReady(false));
+  }, []);
 
   const refreshSavedReports = useCallback(async () => {
     try {
@@ -143,15 +166,17 @@ export function ReportShell<R extends ReportBase, P>({
   };
 
   const handleLoad = async (meta: ThermalReportMeta) => {
-    if (busy) return; // two quick clicks must not race two loads
+    if (busy || aiBusyKey) return; // two quick clicks must not race two loads
     setBusy('load');
     try {
       const json = await thermalApi.getThermalReport(meta.id);
       const parsed = JSON.parse(json) as Record<string, unknown>;
       const message = onLoaded?.(parsed);
+      documentGenRef.current += 1;
       setReport(normalize(parsed));
       setReportName(meta.name);
       setReportId(meta.id);
+      setAiDrafts({});
       setNotice(typeof message === 'string' ? message : null);
     } catch (e) {
       setNotice(`Load failed: ${e instanceof Error ? e.message : e}`);
@@ -161,7 +186,7 @@ export function ReportShell<R extends ReportBase, P>({
   };
 
   const handleDeleteSaved = async (meta: ThermalReportMeta) => {
-    if (busy) return;
+    if (busy || aiBusyKey) return;
     if (!window.confirm(`Delete saved report "${meta.name}"?`)) return;
     try {
       await thermalApi.deleteThermalReport(meta.id);
@@ -173,11 +198,67 @@ export function ReportShell<R extends ReportBase, P>({
   };
 
   const handleNewBlank = () => {
+    if (busy || aiBusyKey) return;
     onNewBlank?.();
+    documentGenRef.current += 1;
     setReport(empty());
     setReportId(null);
     setReportName(defaultName);
+    setAiDrafts({});
   };
+
+  /** Tick: draft the section from the entered data (keeping the user's text for undo). */
+  const runAiDraft = async (s: ReportSectionDef<R>) => {
+    const ai = s.ai;
+    if (!ai || !aiReady) return;
+    setAiBusyKey(s.key);
+    const generation = documentGenRef.current;
+    try {
+      const full = serialize(report);
+      const reply = await draftSection(aiWorkflow, ai.instruction(full), ai.facts(full));
+      if (documentGenRef.current !== generation) {
+        setNotice(`The AI draft for “${s.title}” was discarded because a different report was opened meanwhile.`);
+        return;
+      }
+      // Merge into the state as it is NOW — the user may have edited other
+      // entries while the model was writing
+      const current = reportRef.current;
+      const patch = ai.apply(current, reply);
+      if (!patch) {
+        setNotice(`The AI reply for “${s.title}” could not be applied — try again.`);
+        return;
+      }
+      // Keep the first snapshot across regenerations so undo restores the original
+      setAiDrafts((d) => (d[s.key] ? d : { ...d, [s.key]: ai.snapshot(current) }));
+      setReport((r) => ({ ...r, ...patch }));
+      setNotice(`AI draft applied to “${s.title}” — review and edit it; untick to restore your own text.`);
+    } catch (e) {
+      setNotice(`AI drafting failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setAiBusyKey(null);
+    }
+  };
+
+  /** Untick: put the user's pre-draft text back (per entry where the section is a list). */
+  const undoAiDraft = (s: ReportSectionDef<R>) => {
+    const snapshot = aiDrafts[s.key];
+    const ai = s.ai;
+    if (snapshot && ai) {
+      setReport((r) => ({ ...r, ...(ai.restore ? ai.restore(r, snapshot) : snapshot) }));
+    }
+    setAiDrafts((d) => {
+      const next = { ...d };
+      delete next[s.key];
+      return next;
+    });
+  };
+
+  const aiTitle = (s: ReportSectionDef<R>) =>
+    aiReady === false
+      ? 'Configure an AI API key in Settings (AI Thermal Analysis) to enable AI drafting'
+      : aiDrafts[s.key]
+        ? 'Showing an AI draft — untick to restore your own text'
+        : `Draft the ${s.title} text with AI from the data entered in this report`;
 
   /** Export-time content: reuse the open preview's unless an edit invalidated it. */
   const preparedFor = async (full: R): Promise<P> => {
@@ -283,7 +364,8 @@ export function ReportShell<R extends ReportBase, P>({
             />
             <button
               onClick={handleSave}
-              disabled={busy != null}
+              disabled={busy != null || aiBusyKey != null}
+              title={aiBusyKey ? 'Wait for the AI draft to finish' : undefined}
               className="px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium disabled:opacity-50"
             >
               {busy === 'save' ? 'Saving…' : reportId ? 'Save' : 'Save as new'}
@@ -371,7 +453,8 @@ export function ReportShell<R extends ReportBase, P>({
                 ))}
                 <button
                   onClick={handleNewBlank}
-                  className="px-2 py-1 rounded border border-dashed border-gray-600 text-[11px] text-gray-400 hover:text-white"
+                  disabled={busy != null || aiBusyKey != null}
+                  className="px-2 py-1 rounded border border-dashed border-gray-600 text-[11px] text-gray-400 hover:text-white disabled:opacity-50"
                 >
                   + New blank
                 </button>
@@ -381,11 +464,44 @@ export function ReportShell<R extends ReportBase, P>({
 
           {sections.map((s, i) => (
             <section key={s.key}>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-2 gap-3">
                 <h3 className="text-xs font-semibold text-drone-primary uppercase tracking-wide">
                   {i + 1} · {s.title}
                 </h3>
-                {s.Actions && <s.Actions report={report} update={update} setNotice={setNotice} />}
+                <div className="flex items-center gap-2">
+                  {s.ai && (
+                    <div className="flex items-center gap-1.5" title={aiTitle(s)}>
+                      <label
+                        className={`inline-flex items-center gap-1 text-[10px] select-none ${
+                          aiReady ? 'text-violet-200 cursor-pointer' : 'text-gray-600 cursor-not-allowed'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="accent-violet-500"
+                          disabled={!aiReady || busy != null || aiBusyKey != null}
+                          checked={!!aiDrafts[s.key]}
+                          onChange={(e) => (e.target.checked ? runAiDraft(s) : undoAiDraft(s))}
+                        />
+                        ✨ AI draft
+                      </label>
+                      {aiBusyKey === s.key && (
+                        <span className="text-[10px] text-violet-300 animate-pulse">writing…</span>
+                      )}
+                      {aiDrafts[s.key] && aiBusyKey !== s.key && (
+                        <button
+                          onClick={() => runAiDraft(s)}
+                          disabled={busy != null || aiBusyKey != null}
+                          className="text-[11px] text-violet-300 hover:text-white disabled:opacity-40"
+                          title="Regenerate the AI draft"
+                        >
+                          ↻
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {s.Actions && <s.Actions report={report} update={update} setNotice={setNotice} />}
+                </div>
               </div>
               <s.Component report={report} update={update} setNotice={setNotice} />
             </section>

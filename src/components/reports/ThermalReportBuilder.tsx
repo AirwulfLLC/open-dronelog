@@ -15,7 +15,8 @@ import {
   type ReportImages,
   type ThermalPrepared,
 } from '@/lib/reports/thermalReport';
-import { EMPTY_THERMAL_REPORT, type ThermalReport } from '@/types/thermal';
+import { mergeById, parseAiJson } from '@/lib/reports/ai';
+import { CLASSIFICATION_LABELS, EMPTY_THERMAL_REPORT, type ThermalReport } from '@/types/thermal';
 import { ReportShell, type PreviewEditResult } from './ReportShell';
 import { HeaderSection } from './sections/HeaderSection';
 import { FlightDataSection } from './sections/FlightDataSection';
@@ -25,11 +26,54 @@ import { AnomaliesActions, AnomaliesSection } from './sections/AnomaliesSection'
 import { makeTextSection } from './sections/TextSection';
 import type { ReportSectionDef, SectionProps } from './types';
 
+/** Facts shared by the thermal AI drafts. */
+const anomalyFacts = (r: ThermalReport) =>
+  r.anomalies.map((a) => ({
+    id: a.id,
+    refId: a.refId,
+    location: a.location,
+    position: a.gpsLat != null && a.gpsLon != null ? `${a.gpsLat}, ${a.gpsLon}` : undefined,
+    tMaxC: a.tMax,
+    tMinC: a.tMin,
+    baselineC: a.baseline,
+    deltaTC: a.deltaT,
+    severity: a.severity,
+    classification: CLASSIFICATION_LABELS[a.classification] ?? a.classification,
+    finding: a.finding || undefined,
+    recommendation: a.recommendation || undefined,
+  }));
+
+const flightFacts = (r: ThermalReport) =>
+  r.linkedFlights.map((f) => ({
+    name: f.displayName,
+    date: f.startTime,
+    drone: f.droneModel,
+    durationSecs: f.durationSecs,
+    maxAltitudeM: f.maxAltitude,
+    photos: f.photoCount,
+  }));
+
 const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
   {
     key: 'header',
     title: 'Header Data',
     Component: (p: SectionProps<ThermalReport>) => <HeaderSection {...p} labels={THERMAL_HEADER_LABELS} />,
+    ai: {
+      instruction: () =>
+        'Write the Summary of this thermal inspection report: one or two short paragraphs covering the scope and method (UAV thermal imaging with a DJI radiometric camera), the site and conditions, what was imaged, and the overall condition with the number of anomalies by severity. Do not list every anomaly.',
+      facts: (r) => ({
+        propertyAddress: r.propertyAddress,
+        inspectionDate: r.inspectionDate,
+        weatherConditions: r.weatherConditions,
+        inspector: r.inspectorName,
+        existingSummaryNotes: r.summary || undefined,
+        flights: flightFacts(r),
+        imagingPairs: r.imagingLog.map((e) => ({ caption: e.caption, lrf: e.lrfData || undefined })),
+        anomalies: anomalyFacts(r),
+      }),
+      apply: (_r, reply) => ({ summary: reply }),
+      snapshot: (r) => ({ summary: r.summary }),
+    },
   },
   { key: 'flights', title: 'Flight Data (DJI)', Component: FlightDataSection },
   {
@@ -48,7 +92,32 @@ const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
     Component: ThermalImagingSection,
     Actions: ThermalImagingActions,
   },
-  { key: 'anomalies', title: 'Anomalies & Findings', Component: AnomaliesSection, Actions: AnomaliesActions },
+  {
+    key: 'anomalies',
+    title: 'Anomalies & Findings',
+    Component: AnomaliesSection,
+    Actions: AnomaliesActions,
+    ai: {
+      instruction: () =>
+        'For each anomaly write "finding" (one to three sentences interpreting the thermal signature from the measured temperatures, delta-T and classification — what it most likely indicates and why) and "recommendation" (a specific corrective or verification action). Where existing text is given, keep its intent and improve the wording. Return ONLY a JSON array of objects {"id", "finding", "recommendation"} using the given ids — no other text.',
+      facts: (r) => ({ anomalies: anomalyFacts(r) }),
+      apply: (r, reply) => {
+        const parsed = parseAiJson<unknown>(reply);
+        // Accept a bare array or a {"anomalies": [...]} wrapper
+        const rows = Array.isArray(parsed) ? parsed : (parsed as { anomalies?: unknown } | null)?.anomalies;
+        const { entries, changed } = mergeById(r.anomalies, rows, ['finding', 'recommendation']);
+        return changed ? { anomalies: entries } : null;
+      },
+      snapshot: (r) => ({ anomalies: r.anomalies }),
+      // Restore the drafted text per anomaly; anomalies added since stay
+      restore: (r, snap) => ({
+        anomalies: r.anomalies.map((a) => {
+          const before = (snap.anomalies ?? []).find((x) => x.id === a.id);
+          return before ? { ...a, finding: before.finding, recommendation: before.recommendation } : a;
+        }),
+      }),
+    },
+  },
   {
     key: 'actionPlan',
     title: 'Action Plan & Repair Prioritization',
@@ -56,6 +125,13 @@ const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
       placeholder:
         '1. (High) Repair active moisture intrusion at A-01 …\n2. (Medium) Re-insulate void at A-02 …\n3. Energy-saving upgrades: …',
     }),
+    ai: {
+      instruction: () =>
+        'Write the Action Plan & Repair Prioritization as a numbered list: one item per anomaly (or per group of related anomalies), ordered High → Medium → Low severity, each naming the anomaly id, the corrective action and a timeframe (immediate / schedule / monitor). Close with one sentence on verification by follow-up scan. If there are no anomalies, state that no corrective action is required and recommend a routine re-inspection interval.',
+      facts: (r) => ({ anomalies: anomalyFacts(r), existingPlanNotes: r.actionPlan || undefined }),
+      apply: (_r, reply) => ({ actionPlan: reply }),
+      snapshot: (r) => ({ actionPlan: r.actionPlan }),
+    },
   },
 ];
 
@@ -176,6 +252,7 @@ export function ThermalReportBuilder({ onClose, exportComposedImage }: Props) {
       title="Thermal Inspection Report"
       icon="🌡️"
       defaultName="Inspection Report"
+      aiWorkflow="thermal inspection"
       empty={emptyThermalReport}
       sections={THERMAL_SECTIONS}
       normalize={normalizeThermal}

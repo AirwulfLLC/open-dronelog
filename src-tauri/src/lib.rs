@@ -1,3 +1,4 @@
+pub mod addons;
 pub mod airdata_parser;
 pub mod api;
 pub mod battery_pairs;

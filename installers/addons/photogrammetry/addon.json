@@ -1,0 +1,7 @@
+{
+  "id": "photogrammetry",
+  "name": "Photogrammetry",
+  "version": "0.0.0",
+  "description": "Photo and video library with annotations, Metashape deliverables, an ordered figure queue and photogrammetry survey reports.",
+  "provides": ["photogrammetry"]
+}

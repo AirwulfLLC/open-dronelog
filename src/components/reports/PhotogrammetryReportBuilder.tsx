@@ -9,10 +9,11 @@
  * src/lib/reports/photogrammetryReport.ts.
  */
 
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useThermalStore } from '@/stores/thermalStore';
 import { sanitizeQueueEntries, usePhotogrammetryStore } from '@/stores/photogrammetryStore';
 import { buildPhotogrammetryFigures } from '@/lib/photogrammetryExport';
+import { mergeById, parseAiJson } from '@/lib/reports/ai';
 import { PHOTOGRAMMETRY_HEADER_LABELS } from '@/lib/reports/common';
 import { collectOrthoExtras } from '@/lib/reports/extras';
 import {
@@ -23,6 +24,7 @@ import {
 import {
   EMPTY_PHOTOGRAMMETRY_REPORT,
   METASHAPE_KIND_LABELS,
+  PHOTO_FINDING_CATEGORIES,
   parseMetashapeMeta,
   type PhotogrammetryReport,
   type ThermalAsset,
@@ -36,7 +38,7 @@ import { PhotogrammetryFiguresSection } from './sections/PhotogrammetryFiguresSe
 import { DeliverablesSection } from './sections/DeliverablesSection';
 import { FindingsActions, FindingsSection } from './sections/FindingsSection';
 import { makeTextSection } from './sections/TextSection';
-import { inputCls, labelCls, type ReportSectionDef, type SectionProps } from './types';
+import { inputCls, labelCls, type ReportSectionDef, type SectionAi, type SectionProps } from './types';
 
 function PhotogrammetryHeader(p: SectionProps<PhotogrammetryReport>) {
   return (
@@ -100,6 +102,138 @@ const PHOTOGRAMMETRY_SECTIONS: ReportSectionDef<PhotogrammetryReport>[] = [
   },
 ];
 
+// ---- AI drafting: facts come only from what the user entered ----
+
+const flightFacts = (r: PhotogrammetryReport) =>
+  r.linkedFlights.map((f) => ({
+    name: f.displayName,
+    date: f.startTime,
+    drone: f.droneModel,
+    durationSecs: f.durationSecs,
+    distanceM: f.totalDistance,
+    maxAltitudeM: f.maxAltitude,
+    photos: f.photoCount,
+  }));
+
+const findingFacts = (r: PhotogrammetryReport) =>
+  r.findings.map((f) => ({
+    id: f.id,
+    refId: f.refId,
+    figure: f.figureId ? `Figure ${r.figures.findIndex((x) => x.id === f.figureId) + 1}` : undefined,
+    location: f.location,
+    category: PHOTO_FINDING_CATEGORIES[f.category] ?? f.category,
+    severity: f.severity,
+    observation: f.observation || undefined,
+    recommendation: f.recommendation || undefined,
+  }));
+
+const observationFacts = (r: PhotogrammetryReport) =>
+  r.observations.map((o) => ({
+    id: o.id,
+    refId: o.refId,
+    figure: o.figureId ? `Figure ${r.figures.findIndex((x) => x.id === o.figureId) + 1}` : undefined,
+    location: o.location,
+    text: o.text || undefined,
+  }));
+
+const figureFacts = (r: PhotogrammetryReport) =>
+  r.figures.map((f, i) => ({ figure: i + 1, caption: f.caption || undefined }));
+
+/** Adds the AI drafting definitions; deliverable names need the asset list. */
+function withAi(sections: ReportSectionDef<PhotogrammetryReport>[], assets: ThermalAsset[]) {
+  const deliverableFacts = (r: PhotogrammetryReport) =>
+    metashapeOutputs(assets, r.outputAssetIds).map((o) => ({ file: o.fileName, kind: o.kindLabel, details: o.details || undefined }));
+  const siteFacts = (r: PhotogrammetryReport) => ({
+    projectName: r.projectName || undefined,
+    siteAddress: r.propertyAddress,
+    surveyDate: r.inspectionDate,
+    weatherConditions: r.weatherConditions,
+    operator: r.inspectorName,
+  });
+  const ai: Record<string, SectionAi<PhotogrammetryReport>> = {
+    header: {
+      instruction: () =>
+        'Write the Summary of this photogrammetry survey report: one or two short paragraphs covering the project and site, the method (UAV photogrammetry processed in Agisoft Metashape), the deliverables produced, and the overall condition found, mentioning the number of findings by severity. Do not list every finding.',
+      facts: (r) => ({
+        ...siteFacts(r),
+        surveyScopeNotes: r.surveyPurpose || undefined,
+        existingSummaryNotes: r.summary || undefined,
+        flights: flightFacts(r),
+        deliverables: deliverableFacts(r),
+        figures: figureFacts(r),
+        findings: findingFacts(r),
+        observations: observationFacts(r),
+      }),
+      apply: (_r, reply) => ({ summary: reply }),
+      snapshot: (r) => ({ summary: r.summary }),
+    },
+    scope: {
+      instruction: () =>
+        'Write the Survey Scope section: the objective, the area of interest, the method (UAV photogrammetry, Agisoft Metashape processing) and the deliverables requested or produced. One or two short paragraphs.',
+      facts: (r) => ({
+        ...siteFacts(r),
+        existingScopeNotes: r.surveyPurpose || undefined,
+        summaryNotes: r.summary || undefined,
+        flights: flightFacts(r),
+        deliverables: deliverableFacts(r),
+        figures: figureFacts(r),
+      }),
+      apply: (_r, reply) => ({ surveyPurpose: reply }),
+      snapshot: (r) => ({ surveyPurpose: r.surveyPurpose }),
+    },
+    processing: {
+      instruction: () =>
+        'Write the Processing Notes: the imagery captured (counts and dates where given), the products generated and their characteristics (dimensions, bands, coordinate system, camera and marker counts), and any accuracy information given. Where a value such as GSD or RMSE is not in the facts, do not invent it — say it was not recorded. One short paragraph or a few compact sentences.',
+      facts: (r) => ({
+        existingProcessingNotes: r.processingNotes || undefined,
+        flights: flightFacts(r),
+        deliverables: deliverableFacts(r),
+      }),
+      apply: (_r, reply) => ({ processingNotes: reply }),
+      snapshot: (r) => ({ processingNotes: r.processingNotes }),
+    },
+    findings: {
+      instruction: () =>
+        'For each finding write "observation" (one to three sentences describing what the imagery shows at that location and what it indicates, consistent with the category and severity) and "recommendation" (a specific follow-up or corrective action). For each observation entry write "text" (one to two neutral sentences recording what was seen — no defect grading). Keep the intent of any existing text. Return ONLY JSON: {"findings": [{"id", "observation", "recommendation"}], "observations": [{"id", "text"}]} using the given ids — no other text.',
+      facts: (r) => ({ findings: findingFacts(r), observations: observationFacts(r), figures: figureFacts(r) }),
+      apply: (r, reply) => {
+        const parsed = parseAiJson<{ findings?: unknown; observations?: unknown }>(reply);
+        if (!parsed || typeof parsed !== 'object') return null;
+        const f = mergeById(r.findings, parsed.findings, ['observation', 'recommendation']);
+        const o = mergeById(r.observations, parsed.observations, ['text']);
+        if (!f.changed && !o.changed) return null;
+        return { findings: f.entries, observations: o.entries };
+      },
+      snapshot: (r) => ({ findings: r.findings, observations: r.observations }),
+      // Restore the drafted text per entry; entries added since stay
+      restore: (r, snap) => ({
+        findings: r.findings.map((f) => {
+          const before = (snap.findings ?? []).find((x) => x.id === f.id);
+          return before ? { ...f, observation: before.observation, recommendation: before.recommendation } : f;
+        }),
+        observations: r.observations.map((o) => {
+          const before = (snap.observations ?? []).find((x) => x.id === o.id);
+          return before ? { ...o, text: before.text } : o;
+        }),
+      }),
+    },
+    conclusions: {
+      instruction: () =>
+        'Write the Conclusions & Recommendations section: the overall condition of the site, the priority items by severity, and the recommended follow-up actions and re-survey interval. One or two short paragraphs; refer to findings by their ids.',
+      facts: (r) => ({
+        summaryNotes: r.summary || undefined,
+        scopeNotes: r.surveyPurpose || undefined,
+        existingConclusionNotes: r.conclusions || undefined,
+        findings: findingFacts(r),
+        observations: observationFacts(r),
+      }),
+      apply: (_r, reply) => ({ conclusions: reply }),
+      snapshot: (r) => ({ conclusions: r.conclusions }),
+    },
+  };
+  return sections.map((s) => (ai[s.key] ? { ...s, ai: ai[s.key] } : s));
+}
+
 function emptyPhotogrammetryReport(): PhotogrammetryReport {
   return { ...EMPTY_PHOTOGRAMMETRY_REPORT, inspectionDate: new Date().toISOString().slice(0, 10) };
 }
@@ -149,6 +283,7 @@ interface Props {
 export function PhotogrammetryReportBuilder({ onClose }: Props) {
   const assets = useThermalStore((s) => s.assets);
   const { queue, setQueue, updateEntry } = usePhotogrammetryStore();
+  const sections = useMemo(() => withAi(PHOTOGRAMMETRY_SECTIONS, assets), [assets]);
 
   const prepare = useCallback(
     async (report: PhotogrammetryReport): Promise<PhotogrammetryPrepared> => {
@@ -230,8 +365,9 @@ export function PhotogrammetryReportBuilder({ onClose }: Props) {
       title="Photogrammetry Survey Report"
       icon="📷"
       defaultName="Survey Report"
+      aiWorkflow="photogrammetry survey"
       empty={emptyPhotogrammetryReport}
-      sections={PHOTOGRAMMETRY_SECTIONS}
+      sections={sections}
       normalize={normalizePhotogrammetry}
       onLoaded={onLoaded}
       serialize={serialize}

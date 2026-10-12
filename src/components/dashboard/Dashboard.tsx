@@ -22,6 +22,8 @@ import { Overview } from './Overview';
 import { ProfileSelector } from './ProfileSelector';
 import { ThermalStudio } from '@/components/thermal/ThermalStudio';
 import { PhotogrammetryStudio } from '@/components/photogrammetry/PhotogrammetryStudio';
+import { AddonsModal } from '@/components/addons/AddonsModal';
+import { addonProvides, useAddonStore } from '@/stores/addonStore';
 import { isWebMode } from '@/lib/api';
 import { useIsMobileRuntime } from '@/hooks/platform/useIsMobileRuntime';
 
@@ -46,8 +48,24 @@ export function Dashboard() {
   } = useFlightStore();
   const { t } = useTranslation();
   const [showSettings, setShowSettings] = useState(false);
+  const [showAddons, setShowAddons] = useState(false);
   const [showMessagesModal, setShowMessagesModal] = useState(false);
   const [activeView, setActiveView] = useState<'flights' | 'overview' | 'thermal' | 'photogrammetry'>('overview');
+
+  // The analysis studios are add-ons: their tabs exist only while an enabled
+  // add-on provides them
+  const addons = useAddonStore((s) => s.addons);
+  const loadAddons = useAddonStore((s) => s.load);
+  const thermalOn = addonProvides(addons, 'thermal');
+  const photogrammetryOn = addonProvides(addons, 'photogrammetry');
+  useEffect(() => {
+    loadAddons();
+  }, [loadAddons]);
+  useEffect(() => {
+    if ((activeView === 'thermal' && !thermalOn) || (activeView === 'photogrammetry' && !photogrammetryOn)) {
+      setActiveView('overview');
+    }
+  }, [activeView, thermalOn, photogrammetryOn]);
   const [topSidebarFlightId, setTopSidebarFlightId] = useState<number | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     if (typeof localStorage !== 'undefined') {
@@ -259,6 +277,7 @@ export function Dashboard() {
     <div className={`flex h-full ${showSettings ? 'modal-open' : ''}`}>
       {/* Settings Modal */}
       <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
+      <AddonsModal isOpen={showAddons} onClose={() => setShowAddons(false)} />
 
       {/* Left Sidebar - Flight List */}
       <aside
@@ -326,6 +345,22 @@ export function Dashboard() {
                   </div>
                 </div>
               )}
+              {/* Add-ons Button */}
+              <button
+                onClick={() => setShowAddons(true)}
+                className="px-2 py-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-1"
+                title={t('dashboard.addonsTitle', 'Add-ons — install the Thermal and Photogrammetry studios')}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
+                  />
+                </svg>
+                <span className="text-[11px] font-medium hidden md:inline">{t('dashboard.addons', 'Add-ons')}</span>
+              </button>
               {/* Settings Button */}
               <button
                 onClick={() => setShowSettings(true)}
@@ -386,38 +421,44 @@ export function Dashboard() {
               </button>
               <ProfileSelector />
             </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  setActiveView('thermal');
-                  if (typeof window !== 'undefined' && window.innerWidth < 768) {
-                    setIsSidebarHidden(true);
-                  }
-                }}
-                className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${activeView === 'thermal'
-                  ? 'bg-drone-primary/20 border-drone-primary text-white'
-                  : 'border-gray-700 text-gray-400 hover:text-white'
-                  }`}
-                title={t('dashboard.thermal', 'Thermal analysis studio')}
-              >
-                {t('dashboard.thermal', 'Thermal')}
-              </button>
-              <button
-                onClick={() => {
-                  setActiveView('photogrammetry');
-                  if (typeof window !== 'undefined' && window.innerWidth < 768) {
-                    setIsSidebarHidden(true);
-                  }
-                }}
-                className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${activeView === 'photogrammetry'
-                  ? 'bg-drone-primary/20 border-drone-primary text-white'
-                  : 'border-gray-700 text-gray-400 hover:text-white'
-                  }`}
-                title={t('dashboard.photogrammetryTitle', 'Photogrammetry imagery for inspection reports')}
-              >
-                {t('dashboard.photogrammetry', 'Photogrammetry')}
-              </button>
-            </div>
+            {(thermalOn || photogrammetryOn) && (
+              <div className="flex gap-2">
+                {thermalOn && (
+                  <button
+                    onClick={() => {
+                      setActiveView('thermal');
+                      if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                        setIsSidebarHidden(true);
+                      }
+                    }}
+                    className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${activeView === 'thermal'
+                      ? 'bg-drone-primary/20 border-drone-primary text-white'
+                      : 'border-gray-700 text-gray-400 hover:text-white'
+                      }`}
+                    title={t('dashboard.thermal', 'Thermal analysis studio')}
+                  >
+                    {t('dashboard.thermal', 'Thermal')}
+                  </button>
+                )}
+                {photogrammetryOn && (
+                  <button
+                    onClick={() => {
+                      setActiveView('photogrammetry');
+                      if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                        setIsSidebarHidden(true);
+                      }
+                    }}
+                    className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${activeView === 'photogrammetry'
+                      ? 'bg-drone-primary/20 border-drone-primary text-white'
+                      : 'border-gray-700 text-gray-400 hover:text-white'
+                      }`}
+                    title={t('dashboard.photogrammetryTitle', 'Photogrammetry imagery for inspection reports')}
+                  >
+                    {t('dashboard.photogrammetry', 'Photogrammetry')}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Flight Importer */}

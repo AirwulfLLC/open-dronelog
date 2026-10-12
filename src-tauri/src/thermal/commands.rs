@@ -816,40 +816,81 @@ pub async fn thermal_ai_generate_findings(
     let image_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let user_text = ai_user_prompt(&asset.file_name, &context_json);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-
+    let client = ai_client()?;
+    let image = Some((media_type, image_b64.as_str()));
     match provider.as_str() {
-        "claude" => generate_claude(&client, &api_key, media_type, &image_b64, &user_text).await,
-        "openai" => generate_openai(&client, &api_key, media_type, &image_b64, &user_text).await,
-        "gemini" => generate_gemini(&client, &api_key, media_type, &image_b64, &user_text).await,
+        "claude" => generate_claude(&client, &api_key, AI_SYSTEM_PROMPT, image, &user_text, 16000).await,
+        "openai" => generate_openai(&client, &api_key, AI_SYSTEM_PROMPT, image, &user_text, 16000).await,
+        "gemini" => generate_gemini(&client, &api_key, AI_SYSTEM_PROMPT, image, &user_text, 16000).await,
         other => Err(format!("Unknown AI provider '{other}'")),
     }
 }
 
+/// Text-only generation through the same provider/key selection — used to
+/// draft report sections from the data the user entered. No image is sent.
+#[tauri::command]
+pub async fn thermal_ai_generate_text(
+    system_prompt: String,
+    user_text: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    if user_text.trim().is_empty() {
+        return Err("Nothing to generate from".to_string());
+    }
+    let db = state.db_authenticated()?;
+    let provider = get_ai_provider(&db);
+    let api_key = get_ai_key(&db, &provider).ok_or_else(|| {
+        format!(
+            "No API key configured for the selected AI provider ({provider}) — add one in \
+             Settings (below the DJI API key)."
+        )
+    })?;
+    let client = ai_client()?;
+    let system = if system_prompt.trim().is_empty() { AI_SYSTEM_PROMPT } else { system_prompt.as_str() };
+    // Generous cap: section drafts can be long JSON lists, and some providers
+    // count their reasoning tokens against it
+    match provider.as_str() {
+        "claude" => generate_claude(&client, &api_key, system, None, &user_text, 16000).await,
+        "openai" => generate_openai(&client, &api_key, system, None, &user_text, 16000).await,
+        "gemini" => generate_gemini(&client, &api_key, system, None, &user_text, 16000).await,
+        other => Err(format!("Unknown AI provider '{other}'")),
+    }
+}
+
+const TRUNCATED_MSG: &str =
+    "The reply was cut off at the output limit — draft fewer entries at a time and retry.";
+
+fn ai_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
+/// Optional image attachment: (media type, base64 data).
+type AiImage<'a> = Option<(&'a str, &'a str)>;
+
 async fn generate_claude(
     client: &reqwest::Client,
     api_key: &str,
-    media_type: &str,
-    image_b64: &str,
+    system: &str,
+    image: AiImage<'_>,
     user_text: &str,
+    max_tokens: u32,
 ) -> Result<String, String> {
+    let mut content = Vec::new();
+    if let Some((media_type, image_b64)) = image {
+        content.push(serde_json::json!({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": image_b64}
+        }));
+    }
+    content.push(serde_json::json!({"type": "text", "text": user_text}));
     let body = serde_json::json!({
         "model": "claude-opus-5",
-        "max_tokens": 16000,
-        "system": AI_SYSTEM_PROMPT,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": media_type, "data": image_b64}
-                },
-                {"type": "text", "text": user_text}
-            ]
-        }]
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": content}]
     });
 
     let resp = client
@@ -875,10 +916,12 @@ async fn generate_claude(
     // decline with an HTTP 200 and an empty/partial content array.
     if json["stop_reason"].as_str() == Some("refusal") {
         return Err(
-            "Claude declined to analyze this image (safety refusal). Try again or adjust \
-             the image."
+            "Claude declined this request (safety refusal). Try again or adjust the input."
                 .to_string(),
         );
+    }
+    if json["stop_reason"].as_str() == Some("max_tokens") {
+        return Err(format!("Claude: {TRUNCATED_MSG}"));
     }
     let text = json["content"]
         .as_array()
@@ -900,22 +943,25 @@ async fn generate_claude(
 async fn generate_openai(
     client: &reqwest::Client,
     api_key: &str,
-    media_type: &str,
-    image_b64: &str,
+    system: &str,
+    image: AiImage<'_>,
     user_text: &str,
+    max_tokens: u32,
 ) -> Result<String, String> {
+    let mut content = Vec::new();
+    if let Some((media_type, image_b64)) = image {
+        content.push(serde_json::json!({
+            "type": "image_url",
+            "image_url": {"url": format!("data:{media_type};base64,{image_b64}")}
+        }));
+    }
+    content.push(serde_json::json!({"type": "text", "text": user_text}));
     let body = serde_json::json!({
         "model": "gpt-5",
-        "max_completion_tokens": 16000,
+        "max_completion_tokens": max_tokens,
         "messages": [
-            {"role": "system", "content": AI_SYSTEM_PROMPT},
-            {"role": "user", "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": format!("data:{media_type};base64,{image_b64}")}
-                },
-                {"type": "text", "text": user_text}
-            ]}
+            {"role": "system", "content": system},
+            {"role": "user", "content": content}
         ]
     });
 
@@ -939,7 +985,10 @@ async fn generate_openai(
     }
     let choice = &json["choices"][0];
     if choice["finish_reason"].as_str() == Some("content_filter") {
-        return Err("OpenAI declined to analyze this image (content filter).".to_string());
+        return Err("OpenAI declined this request (content filter).".to_string());
+    }
+    if choice["finish_reason"].as_str() == Some("length") {
+        return Err(format!("OpenAI: {TRUNCATED_MSG}"));
     }
     let text = choice["message"]["content"].as_str().unwrap_or_default();
     if text.trim().is_empty() {
@@ -951,20 +1000,20 @@ async fn generate_openai(
 async fn generate_gemini(
     client: &reqwest::Client,
     api_key: &str,
-    media_type: &str,
-    image_b64: &str,
+    system: &str,
+    image: AiImage<'_>,
     user_text: &str,
+    max_tokens: u32,
 ) -> Result<String, String> {
+    let mut parts = Vec::new();
+    if let Some((media_type, image_b64)) = image {
+        parts.push(serde_json::json!({"inline_data": {"mime_type": media_type, "data": image_b64}}));
+    }
+    parts.push(serde_json::json!({"text": user_text}));
     let body = serde_json::json!({
-        "system_instruction": {"parts": [{"text": AI_SYSTEM_PROMPT}]},
-        "contents": [{
-            "role": "user",
-            "parts": [
-                {"inline_data": {"mime_type": media_type, "data": image_b64}},
-                {"text": user_text}
-            ]
-        }],
-        "generationConfig": {"maxOutputTokens": 16000}
+        "system_instruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {"maxOutputTokens": max_tokens}
     });
 
     let resp = client
@@ -986,7 +1035,10 @@ async fn generate_gemini(
         return Err(format!("Gemini request failed ({status}): {msg}"));
     }
     if let Some(reason) = json["promptFeedback"]["blockReason"].as_str() {
-        return Err(format!("Gemini declined to analyze this image ({reason})."));
+        return Err(format!("Gemini declined this request ({reason})."));
+    }
+    if json["candidates"][0]["finishReason"].as_str() == Some("MAX_TOKENS") {
+        return Err(format!("Gemini: {TRUNCATED_MSG}"));
     }
     let text = json["candidates"][0]["content"]["parts"]
         .as_array()
