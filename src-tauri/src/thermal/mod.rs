@@ -79,6 +79,10 @@ pub struct ExifMeta {
     pub gps_lon: Option<f64>,
     pub captured_at: Option<String>,
     pub camera_model: Option<String>,
+    /// Camera manufacturer (EXIF Make) and body serial number, when recorded —
+    /// the report builder fills the "camera used" fields from them.
+    pub camera_make: Option<String>,
+    pub camera_serial: Option<String>,
 }
 
 /// File extensions accepted by the thermal importer.
@@ -222,6 +226,17 @@ pub fn extract_exif(bytes: &[u8]) -> ExifMeta {
     }
     if let Some(model) = data.get_field(Tag::Model, In::PRIMARY) {
         meta.camera_model = Some(model.display_value().to_string().replace('"', ""));
+    }
+    let text = |field: &exif::Field| {
+        let s = field.display_value().to_string().replace('"', "");
+        let s = s.trim();
+        (!s.is_empty()).then(|| s.to_string())
+    };
+    if let Some(make) = data.get_field(Tag::Make, In::PRIMARY) {
+        meta.camera_make = text(make);
+    }
+    if let Some(serial) = data.get_field(Tag::BodySerialNumber, In::PRIMARY) {
+        meta.camera_serial = text(serial);
     }
     meta
 }

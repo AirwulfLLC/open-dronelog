@@ -17,7 +17,6 @@ import { formatTemp, renderTempsToImageData } from '@/lib/thermalPalettes';
 import { NetworkLayer, hitTestConductor, hitTestNode } from './NetworkLayer';
 import {
   AnnotationShape,
-  drawAnnotationsToCanvas,
   eraseAt,
   eraserRadiusFor,
   hitTest,
@@ -28,8 +27,6 @@ import type { Annotation, NetNode, ThermalAsset } from '@/types/thermal';
 
 interface Props {
   asset: ThermalAsset;
-  /** Ref that exposes the composed (thermal+annotations) image exporter. */
-  exportRef?: React.MutableRefObject<(() => Promise<string | null>) | null>;
   onCaptureFrame?: (blob: Blob) => void;
 }
 
@@ -37,7 +34,7 @@ interface DraftAnnotation {
   annotation: Annotation;
 }
 
-export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
+export function ThermalViewer({ asset, onCaptureFrame }: Props) {
   const {
     matrix,
     analysis,
@@ -540,32 +537,6 @@ export function ThermalViewer({ asset, exportRef, onCaptureFrame }: Props) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [annotations, selectedAnnId, setAnnotations, selectedNetElement, removeNetElement, selectNetElement]);
-
-  // ---- Export composed image (thermal render + annotations baked in) ----
-  useEffect(() => {
-    if (!exportRef) return;
-    exportRef.current = async () => {
-      const out = document.createElement('canvas');
-      out.width = dims.w;
-      out.height = dims.h;
-      const ctx = out.getContext('2d');
-      if (!ctx) return null;
-      if (isRadiometric && canvasRef.current) {
-        ctx.drawImage(canvasRef.current, 0, 0);
-      } else if (imgRef.current) {
-        ctx.drawImage(imgRef.current, 0, 0, dims.w, dims.h);
-      } else if (videoRef.current) {
-        ctx.drawImage(videoRef.current, 0, 0, dims.w, dims.h);
-      } else {
-        return null;
-      }
-      drawAnnotationsToCanvas(ctx, annotations);
-      return out.toDataURL('image/png');
-    };
-    return () => {
-      if (exportRef) exportRef.current = null;
-    };
-  }, [exportRef, dims, isRadiometric, annotations]);
 
   const captureFrame = useCallback(() => {
     const video = videoRef.current;

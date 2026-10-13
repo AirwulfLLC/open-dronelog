@@ -10,12 +10,26 @@ import { inputCls, labelCls, type SectionProps } from '../types';
 
 interface Props extends SectionProps<ReportBase> {
   labels: HeaderLabels;
+  summaryLabel?: string;
   summaryPlaceholder?: string;
+  /** Weather lives here unless the workflow has its own conditions section. */
+  showWeather?: boolean;
   /** Extra fields rendered above the address (e.g. project name). */
   children?: ReactNode;
+  /** Extra fields rendered after the responsible person (credentials, equipment…). */
+  afterPerson?: ReactNode;
 }
 
-export function HeaderSection({ report, update, labels, summaryPlaceholder, children }: Props) {
+export function HeaderSection({
+  report,
+  update,
+  labels,
+  summaryLabel = 'Summary',
+  summaryPlaceholder,
+  showWeather = true,
+  children,
+  afterPerson,
+}: Props) {
   return (
     <div className="grid grid-cols-2 gap-3">
       {children}
@@ -45,17 +59,20 @@ export function HeaderSection({ report, update, labels, summaryPlaceholder, chil
           onChange={(e) => update({ inspectorName: e.target.value })}
         />
       </div>
+      {afterPerson}
+      {showWeather && (
+        <div className="col-span-2">
+          <label className={labelCls}>{labels.weather}</label>
+          <input
+            className={inputCls}
+            value={report.weatherConditions}
+            onChange={(e) => update({ weatherConditions: e.target.value })}
+            placeholder="Overcast, 8 °C, wind 3 m/s NW, no precipitation last 24 h"
+          />
+        </div>
+      )}
       <div className="col-span-2">
-        <label className={labelCls}>{labels.weather}</label>
-        <input
-          className={inputCls}
-          value={report.weatherConditions}
-          onChange={(e) => update({ weatherConditions: e.target.value })}
-          placeholder="Overcast, 8 °C, wind 3 m/s NW, no precipitation last 24 h"
-        />
-      </div>
-      <div className="col-span-2">
-        <label className={labelCls}>Summary</label>
+        <label className={labelCls}>{summaryLabel}</label>
         <textarea
           className={`${inputCls} min-h-[64px]`}
           value={report.summary}

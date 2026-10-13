@@ -11,6 +11,7 @@ import { useThermalStore } from '@/stores/thermalStore';
 import { usePhotogrammetryStore } from '@/stores/photogrammetryStore';
 import { isThermalSupported } from '@/lib/thermalApi';
 import * as thermalApi from '@/lib/thermalApi';
+import { loadThermalReportDefaults } from '@/lib/reports/thermalDefaults';
 import { ThermalViewer } from './ThermalViewer';
 import { AnalysisPanel } from './AnalysisPanel';
 import { ThermalReportBuilder } from '@/components/reports/ThermalReportBuilder';
@@ -71,7 +72,6 @@ export function ThermalStudio() {
       document.querySelector(`[data-asset-row="${assetId}"]`)?.scrollIntoView({ block: 'nearest' });
     });
   }, []);
-  const exportComposedRef = useRef<(() => Promise<string | null>) | null>(null);
   const reportMenuRef = useRef<HTMLDivElement>(null);
 
   const selectedAsset = assets.find((a) => a.id === selectedAssetId) ?? null;
@@ -87,6 +87,12 @@ export function ThermalStudio() {
     loadSdkStatus();
     if (!assetsLoaded) loadAssets();
   }, [loadSdkStatus, loadAssets, assetsLoaded]);
+
+  // The report builder opens later from here; a new report starts from the
+  // thermographer's details of the last one
+  useEffect(() => {
+    if (isThermalSupported()) void loadThermalReportDefaults();
+  }, []);
 
   // Metashape assets are shared with the Photogrammetry tab, which may have
   // annotated the asset selected here while this studio was unmounted. Land
@@ -455,7 +461,6 @@ export function ThermalStudio() {
               <ThermalViewer
                 key={selectedAsset.id}
                 asset={selectedAsset}
-                exportRef={exportComposedRef}
                 onCaptureFrame={handleCaptureFrame}
               />
 
@@ -514,12 +519,7 @@ export function ThermalStudio() {
       </div>
 
       {/* Report builder modal */}
-      {showReportBuilder && (
-        <ThermalReportBuilder
-          onClose={() => setShowReportBuilder(false)}
-          exportComposedImage={exportComposedRef}
-        />
-      )}
+      {showReportBuilder && <ThermalReportBuilder onClose={() => setShowReportBuilder(false)} />}
     </div>
   );
 }

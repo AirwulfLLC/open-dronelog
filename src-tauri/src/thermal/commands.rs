@@ -207,6 +207,20 @@ fn import_asset_impl(
             }
         }
         meta_json = Some(meta.to_string());
+    } else if asset_type == "image" {
+        // Camera make and serial from EXIF ride along as metadata (the model
+        // has its own column) so the report builder can fill in the
+        // equipment used from the imagery
+        let mut meta = serde_json::Map::new();
+        if let Some(make) = &exif.camera_make {
+            meta.insert("cameraMake".to_string(), serde_json::json!(make));
+        }
+        if let Some(serial) = &exif.camera_serial {
+            meta.insert("cameraSerial".to_string(), serde_json::json!(serial));
+        }
+        if !meta.is_empty() {
+            meta_json = Some(serde_json::Value::Object(meta).to_string());
+        }
     }
 
     let asset = ThermalAsset {

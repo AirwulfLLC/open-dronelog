@@ -153,7 +153,8 @@ export async function composeFigure(
   }
 }
 
-async function loadAnnotations(assetId: number): Promise<Annotation[]> {
+/** A picture's stored annotations ([] when none or unreadable). */
+export async function loadAssetAnnotations(assetId: number): Promise<Annotation[]> {
   try {
     const json = await thermalApi.getThermalAnnotations(assetId);
     if (!json) return [];
@@ -188,7 +189,7 @@ export async function buildPhotogrammetryFigures(
     }
     let composed: { dataUrl: string; aspect: number } | null = null;
     try {
-      composed = await composeFigure(asset, await loadAnnotations(asset.id), entry.frameTimeS);
+      composed = await composeFigure(asset, await loadAssetAnnotations(asset.id), entry.frameTimeS);
     } catch (e) {
       console.warn(`Photogrammetry figure for "${asset.fileName}" could not be rendered:`, e);
     }

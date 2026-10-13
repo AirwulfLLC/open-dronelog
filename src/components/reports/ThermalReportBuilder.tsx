@@ -5,7 +5,7 @@
  * src/lib/reports/thermalReport.ts.
  */
 
-import React, { useCallback } from 'react';
+import { useCallback } from 'react';
 import { useThermalStore } from '@/stores/thermalStore';
 import { THERMAL_HEADER_LABELS } from '@/lib/reports/common';
 import { collectOrthoExtras, readAssetDataUrl } from '@/lib/reports/extras';
@@ -16,18 +16,35 @@ import {
   type ReportImages,
   type ThermalPrepared,
 } from '@/lib/reports/thermalReport';
+import { renderRadiometricAsset } from '@/lib/reports/thermalRender';
+import { rememberThermalReportDefaults, thermalReportDefaults } from '@/lib/reports/thermalDefaults';
+import { composeFigure, loadAssetAnnotations } from '@/lib/photogrammetryExport';
 import { mergeById, parseAiJson } from '@/lib/reports/ai';
-import { CLASSIFICATION_LABELS, EMPTY_THERMAL_REPORT, type ThermalReport } from '@/types/thermal';
+import {
+  CLASSIFICATION_LABELS,
+  DEFAULT_THERMAL_LIMITATIONS,
+  EMPTY_THERMAL_REPORT,
+  INVENTORY_STATUS_LABELS,
+  valueSuffixFor,
+  type MeasureOverrides,
+  type ReportImageEntry,
+  type ThermalAsset,
+  type ThermalReport,
+} from '@/types/thermal';
 import { ReportShell, type PreviewEditResult } from './ReportShell';
 import { HeaderSection } from './sections/HeaderSection';
+import { ThermalAdminFields } from './sections/AdministrativeFields';
+import { ConditionsActions, ConditionsSection } from './sections/ConditionsSection';
 import { FlightDataSection } from './sections/FlightDataSection';
 import { OrthomosaicSection } from './sections/OrthomosaicSection';
 import { ThermalImagingActions, ThermalImagingSection } from './sections/ThermalImagingSection';
 import { AnomaliesActions, AnomaliesSection } from './sections/AnomaliesSection';
+import { InventoryActions, InventorySection } from './sections/InventorySection';
 import { makeTextSection } from './sections/TextSection';
-import type { ReportSectionDef, SectionProps } from './types';
+import { smallBtnCls, type ReportSectionDef, type SectionProps } from './types';
 
-/** Facts shared by the thermal AI drafts. */
+// ---- AI drafting facts: only what the user entered ----
+
 const anomalyFacts = (r: ThermalReport) =>
   r.anomalies.map((a) => ({
     id: a.id,
@@ -54,27 +71,94 @@ const flightFacts = (r: ThermalReport) =>
     photos: f.photoCount,
   }));
 
+const adminFacts = (r: ThermalReport) => ({
+  propertyAddress: r.propertyAddress,
+  inspectionDate: r.inspectionDate,
+  inspectionTime: r.inspectionTime || undefined,
+  inspector: r.inspectorName,
+  credentials: r.inspectorCredentials || undefined,
+  camera: [r.cameraMake, r.cameraModel].filter(Boolean).join(' ') || undefined,
+  assetTags: r.assetTags || undefined,
+});
+
+const conditionFacts = (r: ThermalReport) => ({
+  weather: r.weatherConditions || undefined,
+  ambientTempC: r.ambientTempC ?? undefined,
+  relativeHumidityPct: r.humidityPct ?? undefined,
+  loadConditions: r.loadConditions || undefined,
+  emissivity: r.emissivity ?? undefined,
+  reflectedTempC: r.reflectedTempC ?? undefined,
+  measurementDistanceM: r.measurementDistanceM ?? undefined,
+});
+
+const inventoryFacts = (r: ThermalReport) =>
+  r.inventory.map((i) => ({
+    tag: i.tag,
+    description: i.description,
+    status: INVENTORY_STATUS_LABELS[i.status],
+    note: i.note || undefined,
+  }));
+
+function ThermalHeader(p: SectionProps<ThermalReport>) {
+  return (
+    <HeaderSection
+      {...p}
+      labels={THERMAL_HEADER_LABELS}
+      showWeather={false}
+      summaryLabel="Executive summary"
+      summaryPlaceholder="Primary discoveries, problem locations and urgency levels…"
+      afterPerson={<ThermalAdminFields {...p} />}
+    />
+  );
+}
+
+function LimitationsActions({ report, update }: SectionProps<ThermalReport>) {
+  const isStandard = report.limitations.trim() === DEFAULT_THERMAL_LIMITATIONS.trim();
+  return (
+    <button
+      onClick={() => {
+        if (
+          !report.limitations.trim() ||
+          window.confirm('Replace this text with the standard limitations, definitions and disclaimer?')
+        ) {
+          update({ limitations: DEFAULT_THERMAL_LIMITATIONS });
+        }
+      }}
+      disabled={isStandard}
+      className={`${smallBtnCls} disabled:opacity-40`}
+      title="Put the standard text back"
+    >
+      ↺ Standard text
+    </button>
+  );
+}
+
 const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
   {
     key: 'header',
-    title: 'Header Data',
-    Component: (p: SectionProps<ThermalReport>) => <HeaderSection {...p} labels={THERMAL_HEADER_LABELS} />,
+    title: 'Header Data & Administrative Information',
+    Component: ThermalHeader,
     ai: {
       instruction: () =>
-        'Write the Summary of this thermal inspection report: one or two short paragraphs covering the scope and method (UAV thermal imaging with a DJI radiometric camera), the site and conditions, what was imaged, and the overall condition with the number of anomalies by severity. Do not list every anomaly.',
+        'Write the Executive Summary of this thermal inspection report: one or two short paragraphs covering the scope and method (UAV thermal imaging with a DJI radiometric camera, the equipment and conditions stated), the site, what was imaged, the primary discoveries with their locations and urgency, the overall condition with the number of anomalies by severity, and any assets that could not be inspected. Do not list every anomaly.',
       facts: (r) => ({
-        propertyAddress: r.propertyAddress,
-        inspectionDate: r.inspectionDate,
-        weatherConditions: r.weatherConditions,
-        inspector: r.inspectorName,
+        ...adminFacts(r),
+        conditions: conditionFacts(r),
         existingSummaryNotes: r.summary || undefined,
         flights: flightFacts(r),
         imagingPairs: r.imagingLog.map((e) => ({ caption: e.caption, lrf: e.lrfData || undefined })),
         anomalies: anomalyFacts(r),
+        assetInventory: inventoryFacts(r),
       }),
       apply: (_r, reply) => ({ summary: reply }),
       snapshot: (r) => ({ summary: r.summary }),
     },
+  },
+  {
+    key: 'conditions',
+    title: 'Environmental & System Conditions',
+    Component: ConditionsSection,
+    Actions: ConditionsActions,
   },
   { key: 'flights', title: 'Flight Data (DJI)', Component: FlightDataSection },
   {
@@ -101,7 +185,7 @@ const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
     ai: {
       instruction: () =>
         'For each anomaly write "finding" (one to three sentences interpreting the thermal signature from the measured temperatures, delta-T and classification — what it most likely indicates and why) and "recommendation" (a specific corrective or verification action). Where existing text is given, keep its intent and improve the wording. Return ONLY a JSON array of objects {"id", "finding", "recommendation"} using the given ids — no other text.',
-      facts: (r) => ({ anomalies: anomalyFacts(r) }),
+      facts: (r) => ({ conditions: conditionFacts(r), anomalies: anomalyFacts(r) }),
       apply: (r, reply) => {
         const parsed = parseAiJson<unknown>(reply);
         // Accept a bare array or a {"anomalies": [...]} wrapper
@@ -120,6 +204,12 @@ const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
     },
   },
   {
+    key: 'inventory',
+    title: 'Asset Inventory & Exception List',
+    Component: InventorySection,
+    Actions: InventoryActions,
+  },
+  {
     key: 'actionPlan',
     title: 'Action Plan & Repair Prioritization',
     Component: makeTextSection<ThermalReport>('actionPlan', {
@@ -128,21 +218,59 @@ const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
     }),
     ai: {
       instruction: () =>
-        'Write the Action Plan & Repair Prioritization as a numbered list: one item per anomaly (or per group of related anomalies), ordered High → Medium → Low severity, each naming the anomaly id, the corrective action and a timeframe (immediate / schedule / monitor). Close with one sentence on verification by follow-up scan. If there are no anomalies, state that no corrective action is required and recommend a routine re-inspection interval.',
-      facts: (r) => ({ anomalies: anomalyFacts(r), existingPlanNotes: r.actionPlan || undefined }),
+        'Write the Action Plan & Repair Prioritization as a numbered list: one item per anomaly (or per group of related anomalies), ordered High → Medium → Low severity, each naming the anomaly id, the corrective, troubleshooting or predictive-maintenance action as a work order, and a timeframe (immediate / schedule / monitor). If there are no anomalies, state that no corrective action is required.',
+      facts: (r) => ({ anomalies: anomalyFacts(r), assetInventory: inventoryFacts(r), existingPlanNotes: r.actionPlan || undefined }),
       apply: (_r, reply) => ({ actionPlan: reply }),
       snapshot: (r) => ({ actionPlan: r.actionPlan }),
     },
   },
+  {
+    key: 'followUp',
+    title: 'Follow-Up & Re-inspection',
+    Component: makeTextSection<ThermalReport>('followUp', {
+      placeholder:
+        'Post-repair verification scan of A-01 and A-02 within 30 days of the repair, under comparable load and ambient conditions …\nPeriodic re-inspection of the switchgear every 12 months; trend the hot-spot temperatures against this report.',
+    }),
+    ai: {
+      instruction: () =>
+        'Write the Follow-Up & Re-inspection plan: for each High and Medium anomaly, the post-repair verification scan to perform and when; the periodic re-inspection or temperature-trending interval appropriate to the assets inspected; what later scans should reproduce from this report to be comparable (load conditions, ambient conditions, emissivity and distance settings, palette and scale); and a note on any assets that were not inspected. If there are no anomalies, recommend a routine interval only. A short numbered list or two short paragraphs.',
+      facts: (r) => ({
+        inspectionDate: r.inspectionDate,
+        conditions: conditionFacts(r),
+        anomalies: anomalyFacts(r),
+        actionPlanNotes: r.actionPlan || undefined,
+        assetInventory: inventoryFacts(r),
+        existingFollowUpNotes: r.followUp || undefined,
+      }),
+      apply: (_r, reply) => ({ followUp: reply }),
+      snapshot: (r) => ({ followUp: r.followUp }),
+    },
+  },
+  {
+    key: 'limitations',
+    title: 'Limitations, Definitions & Disclaimer',
+    Component: makeTextSection<ThermalReport>('limitations', {
+      minHeight: 180,
+      hint: 'Printed as the closing section: what thermography can and cannot show, the terms used, and the disclaimer. Edit freely or restore the standard text.',
+    }),
+    Actions: LimitationsActions,
+  },
 ];
 
 function emptyThermalReport(): ThermalReport {
-  return { ...EMPTY_THERMAL_REPORT, inspectionDate: new Date().toISOString().slice(0, 10) };
+  return {
+    ...EMPTY_THERMAL_REPORT,
+    // The thermographer's details and camera from the last report
+    ...thermalReportDefaults(),
+    inspectionDate: new Date().toISOString().slice(0, 10),
+  };
 }
 
 /** Stored JSON → current shape. Fields this workflow no longer knows (e.g. the
  *  `photogrammetry` figures of reports saved by the earlier combined builder)
- *  ride along untouched, so re-saving never destroys them. */
+ *  ride along untouched, so re-saving never destroys them. Reports saved
+ *  before a section existed get its empty value (and the standard
+ *  limitations text). */
 function normalizeThermal(parsed: Record<string, unknown>): ThermalReport {
   return { ...EMPTY_THERMAL_REPORT, ...(parsed as Partial<ThermalReport>), kind: 'thermal' };
 }
@@ -168,63 +296,76 @@ export function routeAssetNoteEdit(path: string, value: string): PreviewEditResu
   return { handled: true, invalidatesPrepared: true };
 }
 
-interface Props {
-  onClose: () => void;
-  /** Thermal Studio's live composed view (palette + annotations) of the selected asset. */
-  exportComposedImage: React.MutableRefObject<(() => Promise<string | null>) | null>;
-}
-
-export function ThermalReportBuilder({ onClose, exportComposedImage }: Props) {
-  const { assets, selectedAssetId, annotations } = useThermalStore();
-
-  const assetToDataUrl = useCallback(
-    async (assetId: number | null): Promise<string | null> => {
-      if (assetId == null) return null;
-      const asset = assets.find((a) => a.id === assetId);
-      if (!asset || asset.assetType !== 'image') return null;
-      // Use the live annotated/palette-rendered view for the selected asset
-      if (
-        assetId === selectedAssetId &&
-        exportComposedImage.current &&
-        (annotations.length > 0 || asset.isRadiometric)
-      ) {
-        try {
-          const composed = await exportComposedImage.current();
-          if (composed) return composed;
-        } catch {
-          // fall through to the stored file
-        }
-      }
-      return readAssetDataUrl(asset);
-    },
-    [assets, selectedAssetId, exportComposedImage, annotations],
-  );
-
-  const prepare = useCallback(
-    async (report: ThermalReport): Promise<ThermalPrepared> => {
-      // Notes typed moments ago must be in the list we read from
-      await useThermalStore.getState().flushAssetNotes();
-      const current = useThermalStore.getState().assets;
-      const images: ReportImages = {};
-      const find = (id: number | null) => (id == null ? null : current.find((x) => x.id === id) ?? null);
-      for (const entry of report.imagingLog) {
-        const visual = find(entry.visualAssetId);
-        const thermal = find(entry.thermalAssetId);
-        const notes: PairNote[] = [];
-        if (visual) notes.push({ assetId: visual.id, label: 'Visual note', text: visual.notes ?? '' });
-        if (thermal) notes.push({ assetId: thermal.id, label: 'Thermal note', text: thermal.notes ?? '' });
-        images[entry.id] = {
-          thermal: await assetToDataUrl(entry.thermalAssetId),
-          visual: await assetToDataUrl(entry.visualAssetId),
-          notes,
-          // Picture names as they read in the library (renames included)
-          details: pairDetails(visual, thermal),
+/** A pair's picture as printed: radiometric pictures through the pair's
+ *  palette and span, everything else as stored — the picture's annotations
+ *  drawn in either case. */
+async function renderPairPicture(
+  asset: ThermalAsset,
+  entry: ReportImageEntry,
+  overrides: MeasureOverrides,
+): Promise<{ dataUrl: string | null; scale?: string }> {
+  const annotations = await loadAssetAnnotations(asset.id);
+  if (asset.isRadiometric) {
+    try {
+      const r = await renderRadiometricAsset(asset, entry, annotations, overrides);
+      if (r) {
+        const unit = valueSuffixFor(asset);
+        const dp = unit ? 1 : 3;
+        return {
+          dataUrl: r.dataUrl,
+          scale: `${r.paletteLabel} palette, scale ${r.low.toFixed(dp)} to ${r.high.toFixed(dp)}${unit ? ' °C' : ''}`,
         };
       }
-      return { images, extras: await collectOrthoExtras(report.orthoAssetId, current) };
-    },
-    [assetToDataUrl],
-  );
+    } catch (e) {
+      // No SDK (thermal add-on missing) or an unreadable matrix: the stored
+      // picture's own rendering, still with its drawings (below)
+      console.warn(`Radiometric rendering of "${asset.fileName}" failed:`, e);
+    }
+  }
+  try {
+    const composed = await composeFigure(asset, annotations);
+    if (composed) return { dataUrl: composed.dataUrl };
+  } catch (e) {
+    console.warn(`Picture "${asset.fileName}" could not be composed:`, e);
+  }
+  return { dataUrl: await readAssetDataUrl(asset) };
+}
+
+interface Props {
+  onClose: () => void;
+}
+
+export function ThermalReportBuilder({ onClose }: Props) {
+  const assets = useThermalStore((s) => s.assets);
+
+  const prepare = useCallback(async (report: ThermalReport): Promise<ThermalPrepared> => {
+    const store = useThermalStore.getState();
+    // Drawings and notes made moments ago must be in the database / list first
+    await store.flushAnnotations();
+    await store.flushAssetNotes();
+    const current = store.assets;
+    const overrides = store.measureOverrides;
+    const find = (id: number | null) => (id == null ? null : (current.find((x) => x.id === id) ?? null));
+    const images: ReportImages = {};
+    for (const entry of report.imagingLog) {
+      const visual = find(entry.visualAssetId);
+      const thermal = find(entry.thermalAssetId);
+      const notes: PairNote[] = [];
+      if (visual) notes.push({ assetId: visual.id, label: 'Visual note', text: visual.notes ?? '' });
+      if (thermal) notes.push({ assetId: thermal.id, label: 'Thermal note', text: thermal.notes ?? '' });
+      const thermalOut = thermal ? await renderPairPicture(thermal, entry, overrides) : null;
+      const visualOut = visual ? await renderPairPicture(visual, entry, overrides) : null;
+      images[entry.id] = {
+        thermal: thermalOut?.dataUrl ?? null,
+        visual: visualOut?.dataUrl ?? null,
+        notes,
+        // Picture names as they read in the library, palette and scale, capture data
+        details: pairDetails(visual, thermal, thermalOut?.scale),
+        unit: thermal ? valueSuffixFor(thermal) : '°C',
+      };
+    }
+    return { images, extras: await collectOrthoExtras(report.orthoAssetId, current) };
+  }, []);
 
   const referencedAssetIds = useCallback(
     (report: ThermalReport): number[] => {
@@ -259,6 +400,8 @@ export function ThermalReportBuilder({ onClose, exportComposedImage }: Props) {
       normalize={normalizeThermal}
       onLoaded={legacyFiguresNotice}
       serialize={(r) => r}
+      // The thermographer's details and camera of a saved/exported report seed the next new one
+      onPersist={rememberThermalReportDefaults}
       referencedAssetIds={referencedAssetIds}
       prepare={prepare}
       render={renderThermalReport}

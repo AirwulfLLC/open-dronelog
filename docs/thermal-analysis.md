@@ -258,21 +258,55 @@ added to either report independently: a field on the report type, a section
 component (`src/components/reports/sections/`), and its renderer in that
 kind's module under `src/lib/reports/`.
 
-**Thermal Inspection Report** (Thermal Studio) — building-envelope structure:
+**Thermal Inspection Report** (Thermal Studio) — follows the structure of a
+professional thermography report (administrative data, conditions, imagery
+pairs, executive summary and findings, recommendations and follow-up,
+limitations):
 
-1. **Header Data** — property address, inspection date, weather conditions,
-   inspector name, summary.
-2. **Flight Data (DJI)** — linked flights (operations snapshot embedded).
-3. **Orthomosaic (Agisoft Metashape)** — embedded orthomosaic + map link.
-4. **Thermal Imaging Log / Comparative Matrix** — side-by-side Visual
-   (Zoom/Wide) and Thermal (Infrared) images with captions and LRF
-   (laser rangefinder) data per pair. The currently selected asset exports
-   with its palette rendering and annotations.
-5. **Anomalies & Findings** — unique IDs, location + geotag, T_max/T_min,
+1. **Header Data & Administrative Information** — property address,
+   inspection date and time, inspector/thermographer with credentials and
+   contact details, camera make, model and serial number (*Fill camera from
+   imagery* reads them from the pictures' EXIF data), asset IDs/tags covered,
+   and the executive summary. The thermographer's details and camera of the
+   last saved or exported report are remembered per profile and prefilled
+   into the next new report.
+2. **Environmental & System Conditions** — weather (sun exposure, wind),
+   ambient temperature, relative humidity, system/electrical load during the
+   survey, and the calibration used for the measurements: emissivity,
+   reflected (background) temperature and distance (*Use analysis parameters*
+   copies them from the selected picture's radiometric analysis).
+3. **Flight Data (DJI)** — linked flights (operations snapshot embedded).
+4. **Orthomosaic (Agisoft Metashape)** — embedded orthomosaic + map link.
+5. **Thermal Imaging Log / Comparative Matrix** — side-by-side Visual
+   (Zoom/Wide) and Thermal (Infrared) images with captions and LRF (laser
+   rangefinder) data per pair. Each pair carries the **palette and
+   temperature scale** its thermal picture is rendered with (seeded from the
+   studio when the pair is added; blank scale = the picture's min/max) and
+   prints them under the pair, together with the picture names, capture data
+   and the anomalies logged on that picture with their ΔT. Every radiometric
+   picture renders through that palette with its annotations — not only the
+   one open in the studio. *Pairs for anomalies* adds a pair for every
+   picture that has anomalies; the visual twin is matched by DJI's file
+   naming (`…_T`/`…_R` ↔ `…_W`/`…_V`/`…_Z`).
+6. **Anomalies & Findings** — unique IDs, location + geotag, T_max/T_min,
    reference baseline, ΔT, severity grade and defect classification.
    Detected anomalies can be imported automatically.
-6. **Action Plan & Repair Prioritization** — free-form plan plus an automatic
-   priority summary derived from severity grades.
+7. **Asset Inventory & Exception List** — every inspected asset or area with
+   a status: *Normal*, *Exception* (one row per anomaly with *Exceptions from
+   anomalies*) or *Not inspected / inaccessible* with the reason. The report
+   prints the table, the counts, and the list of uninspected assets.
+8. **Action Plan & Repair Prioritization** — work orders by severity (the
+   priority summary derived from the severity grades prints under the
+   executive summary).
+9. **Follow-Up & Re-inspection** — post-repair verification scans, periodic
+   re-inspection or temperature-trending interval, and what later scans
+   should reproduce to be comparable.
+10. **Limitations, Definitions & Disclaimer** — prefilled with a standard
+    text on what thermography can and cannot show (no view inside solid
+    materials, no confirmation of moisture or mould without physical
+    testing…), definitions of T max/T min, baseline, ΔT, emissivity,
+    reflected temperature and the severity grades, and a disclaimer; edit
+    freely or restore the standard text.
 
 **Photogrammetry Survey Report** (Photogrammetry tab):
 
@@ -297,7 +331,8 @@ kind's module under `src/lib/reports/`.
 8. **Conclusions & Recommendations** — narrative plus the severity summary.
 
 **✨ AI draft** — sections whose text can be composed from the data entered
-(Summary, Anomalies & Findings and Action Plan for thermal reports; Summary,
+(Executive Summary, Anomalies & Findings, Action Plan and Follow-Up &
+Re-inspection for thermal reports; Summary,
 Survey Scope, Processing Notes, Findings & Observations and Conclusions for
 photogrammetry reports) carry an *AI draft* tick in their heading. Ticking it
 sends only the facts entered in the report — never images — to the AI

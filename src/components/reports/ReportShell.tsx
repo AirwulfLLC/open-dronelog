@@ -52,6 +52,9 @@ export interface ReportShellProps<R extends ReportBase, P> {
   onLoaded?: (parsed: Record<string, unknown>) => string | void;
   /** Inject live data right before save/export. */
   serialize: (report: R) => R;
+  /** Called with the serialized report after it was saved or exported to a
+   *  file (not for previews or AI drafts). */
+  onPersist?: (report: R) => void;
   /** Asset ids an inspection bundle must carry for this report. */
   referencedAssetIds: (report: R) => number[];
   /** Resolve export-time content (images, figures) for a serialized report. */
@@ -76,6 +79,7 @@ export function ReportShell<R extends ReportBase, P>({
   normalize,
   onLoaded,
   serialize,
+  onPersist,
   referencedAssetIds,
   prepare,
   render,
@@ -150,12 +154,10 @@ export function ReportShell<R extends ReportBase, P>({
   const handleSave = async () => {
     setBusy('save');
     try {
-      const id = await thermalApi.saveThermalReport(
-        reportId,
-        reportName,
-        JSON.stringify(serialize(report)),
-      );
+      const full = serialize(report);
+      const id = await thermalApi.saveThermalReport(reportId, reportName, JSON.stringify(full));
       setReportId(id);
+      onPersist?.(full);
       await refreshSavedReports();
       setNotice('Report saved.');
     } catch (e) {
@@ -278,7 +280,10 @@ export function ReportShell<R extends ReportBase, P>({
       const out = await renderToFormat(format, render, full, prepared);
       const info = EXPORT_FORMATS[format];
       const ok = await saveReportFile(`${safeName()}.${info.ext}`, out, info.filter, info.ext, info.mime);
-      if (ok) setNotice(`${info.label} exported.`);
+      if (ok) {
+        onPersist?.(full);
+        setNotice(`${info.label} exported.`);
+      }
     } catch (e) {
       setNotice(`${EXPORT_FORMATS[format].label} export failed: ${e instanceof Error ? e.message : e}`);
     } finally {

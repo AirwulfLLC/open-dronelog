@@ -121,6 +121,23 @@ export function valueSuffixFor(asset: ThermalAsset | null): string {
   return parseMetashapeMeta(asset)?.kind === 'vegetation_index' ? '' : '°C';
 }
 
+/** Camera details the importer read from a photo's EXIF (the model has its own field). */
+export interface CameraMeta {
+  cameraMake?: string;
+  cameraSerial?: string;
+}
+
+export function parseCameraMeta(asset: ThermalAsset): CameraMeta {
+  if (asset.source === 'metashape' || !asset.metaJson) return {};
+  try {
+    const m = JSON.parse(asset.metaJson) as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    return { cameraMake: str(m.cameraMake), cameraSerial: str(m.cameraSerial) };
+  } catch {
+    return {};
+  }
+}
+
 export interface ThermalSdkStatus {
   available: boolean;
   sdkDir: string | null;
@@ -393,6 +410,34 @@ export interface ReportImageEntry {
   /** Laser Rangefinder data / notes column (free text). */
   lrfData: string;
   caption: string;
+  /** Palette the thermal picture is rendered with in the report (a PALETTES
+   *  key; absent = Iron Red). */
+  paletteKey?: string;
+  /** Temperature span mapped to the palette; null/absent = the picture's own
+   *  min/max. Printed under the pair as the temperature scale. */
+  spanLow?: number | null;
+  spanHigh?: number | null;
+}
+
+export type InventoryStatus = 'normal' | 'exception' | 'not_inspected';
+
+export const INVENTORY_STATUS_LABELS: Record<InventoryStatus, string> = {
+  normal: 'Normal',
+  exception: 'Exception',
+  not_inspected: 'Not inspected / inaccessible',
+};
+
+/** One asset or area of the inspected system. The inventory doubles as the
+ *  exception list (status "exception") and the list of uninspected or
+ *  inaccessible items (status "not_inspected"). */
+export interface InventoryEntry {
+  id: string;
+  /** Asset ID / tag ("MDP-1", "Roof, north slope"). */
+  tag: string;
+  description: string;
+  status: InventoryStatus;
+  /** Related anomaly ids, the reason an item was not inspected, remarks. */
+  note: string;
 }
 
 export interface ReportAnomalyEntry {
@@ -458,10 +503,71 @@ export interface ReportBase {
 
 export interface ThermalReport extends ReportBase {
   kind: 'thermal';
+  // ---- Administrative & metadata ----
+  /** Time of day / window of the survey ("09:30–11:15"). */
+  inspectionTime: string;
+  /** Thermographer credentials (certification level, licences). */
+  inspectorCredentials: string;
+  /** Thermographer contact details (company, phone, e-mail). */
+  inspectorContact: string;
+  cameraMake: string;
+  cameraModel: string;
+  cameraSerial: string;
+  /** Asset ID tags / areas covered by the survey. */
+  assetTags: string;
+  // ---- Environmental & system conditions ----
+  ambientTempC: number | null;
+  humidityPct: number | null;
+  /** System or electrical load during the survey ("MDP at ~80% load, HVAC running"). */
+  loadConditions: string;
+  /** Emissivity, reflected (background) temperature and distance the
+   *  measurements were calibrated with. */
+  emissivity: number | null;
+  reflectedTempC: number | null;
+  measurementDistanceM: number | null;
+  // ---- Evidence & findings ----
   imagingLog: ReportImageEntry[];
   anomalies: ReportAnomalyEntry[];
+  /** Asset inventory with status per item (normal / exception / not inspected). */
+  inventory: InventoryEntry[];
+  // ---- Recommendations & follow-up ----
   actionPlan: string;
+  /** Post-repair re-inspection and periodic temperature-trending plan. */
+  followUp: string;
+  /** Limitations of the method, definitions and disclaimer (prefilled; editable). */
+  limitations: string;
 }
+
+/** Standard limitations, definitions and disclaimer text new thermal reports
+ *  start with. "dT" rather than the Greek delta: the PDF's built-in fonts
+ *  cannot print it. */
+export const DEFAULT_THERMAL_LIMITATIONS = [
+  'Limitations of infrared thermography',
+  'Infrared thermography measures apparent surface temperature only. It cannot see inside solid ' +
+    'materials, confirm the presence of moisture, mould or concealed defects without physical or ' +
+    'instrumented verification, or by itself determine the cause of a thermal pattern. Apparent ' +
+    'temperatures depend on the emissivity and reflectivity of the surface, the reflected (background) ' +
+    'temperature, atmospheric conditions, distance and viewing angle; readings on low-emissivity ' +
+    'surfaces such as bare metal or glass are unreliable. A pattern can only be detected where a ' +
+    'sufficient temperature difference existed at the time of the survey, and conditions at other ' +
+    'times may differ. Areas that were inaccessible, obstructed or outside the field of view were not ' +
+    'assessed; they are listed in the asset inventory.',
+  '',
+  'Definitions',
+  'T max / T min: the highest and lowest apparent temperatures measured within the anomaly region. ' +
+    'Baseline: the reference apparent temperature of comparable unaffected surfaces in the same image. ' +
+    'dT (delta-T): the difference between the anomaly temperature and the baseline. Emissivity: how ' +
+    'efficiently a surface emits infrared energy (0 to 1), set on the camera for the surface measured. ' +
+    'Reflected (background) temperature: the apparent temperature of the surroundings reflected by the ' +
+    'surface, used to correct the measurement. Severity: High = immediate corrective action ' +
+    'recommended; Medium = schedule repair; Low = monitor and re-inspect.',
+  '',
+  'Disclaimer',
+  'This report records the conditions observed with the stated equipment, settings and environmental ' +
+    'conditions at the time of the survey. Findings are indicative and should be confirmed by a ' +
+    'qualified specialist before repair decisions are made. No warranty is given that defects not ' +
+    'detectable by thermal imaging are absent.',
+].join('\n');
 
 /** A photogrammetry-survey observation, optionally tied to one of the figures. */
 export interface PhotogrammetryFinding {
@@ -520,9 +626,25 @@ const EMPTY_REPORT_BASE: Omit<ReportBase, 'kind'> = {
 export const EMPTY_THERMAL_REPORT: ThermalReport = {
   ...EMPTY_REPORT_BASE,
   kind: 'thermal',
+  inspectionTime: '',
+  inspectorCredentials: '',
+  inspectorContact: '',
+  cameraMake: '',
+  cameraModel: '',
+  cameraSerial: '',
+  assetTags: '',
+  ambientTempC: null,
+  humidityPct: null,
+  loadConditions: '',
+  emissivity: null,
+  reflectedTempC: null,
+  measurementDistanceM: null,
   imagingLog: [],
   anomalies: [],
+  inventory: [],
   actionPlan: '',
+  followUp: '',
+  limitations: DEFAULT_THERMAL_LIMITATIONS,
 };
 
 export const EMPTY_PHOTOGRAMMETRY_REPORT: PhotogrammetryReport = {
