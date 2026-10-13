@@ -474,6 +474,7 @@ export interface FlightSnapshot {
   displayName: string;
   startTime: string | null;
   droneModel: string | null;
+  droneSerial?: string | null;
   aircraftName: string | null;
   durationSecs: number | null;
   totalDistance: number | null;
@@ -491,9 +492,17 @@ export interface ReportBase {
   // Header data
   propertyAddress: string;
   inspectionDate: string;
+  /** Time of day / window of the flights ("09:31–10:12"); filled from the linked flight logs. */
+  inspectionTime: string;
+  /** Site coordinates ("41.110300, -85.211000"); filled from the flights' home point. */
+  sitePosition: string;
   weatherConditions: string;
   inspectorName: string;
   summary: string;
+  /** Aircraft that flew the survey (model and name) and its serial number;
+   *  filled from the linked flight logs. */
+  droneModel: string;
+  droneSerial: string;
   orthomosaicLink: string;
   /** DJI flights linked to this report (snapshots, not live references). */
   linkedFlights: FlightSnapshot[];
@@ -504,8 +513,6 @@ export interface ReportBase {
 export interface ThermalReport extends ReportBase {
   kind: 'thermal';
   // ---- Administrative & metadata ----
-  /** Time of day / window of the survey ("09:30–11:15"). */
-  inspectionTime: string;
   /** Thermographer credentials (certification level, licences). */
   inspectorCredentials: string;
   /** Thermographer contact details (company, phone, e-mail). */
@@ -593,17 +600,106 @@ export interface PhotogrammetryObservation {
   text: string;
 }
 
+/** The standard photogrammetry deliverables. Core visual products and
+ *  topographical products print in separate report sections. */
+export type DeliverableKind = 'orthomosaic' | 'point_cloud' | 'mesh' | 'dsm' | 'dtm' | 'contours' | 'other';
+
+export const DELIVERABLE_KIND_LABELS: Record<DeliverableKind, string> = {
+  orthomosaic: 'Orthomosaic Map',
+  point_cloud: '3D Point Cloud',
+  mesh: '3D Textured Mesh',
+  dsm: 'Digital Elevation / Surface Model (DEM/DSM)',
+  dtm: 'Digital Terrain Model (DTM)',
+  contours: 'Contour Line Map',
+  other: 'Other deliverable',
+};
+
+export const CORE_DELIVERABLE_KINDS: DeliverableKind[] = ['orthomosaic', 'point_cloud', 'mesh', 'other'];
+export const ELEVATION_DELIVERABLE_KINDS: DeliverableKind[] = ['dsm', 'dtm', 'contours'];
+
+export type DeliverableStatus = 'produced' | 'not_produced';
+
+/** One deliverable of the survey, with its specification (resolution, point
+ *  count, CRS, interval…) and where it is hosted. */
+export interface DeliverableEntry {
+  id: string;
+  kind: DeliverableKind;
+  status: DeliverableStatus;
+  /** Title for "other" kinds; blank otherwise (the kind label is used). */
+  title: string;
+  details: string;
+  link: string;
+}
+
+export type MeasurementKind = 'volume' | 'area' | 'length' | 'height' | 'other';
+
+export const MEASUREMENT_KIND_LABELS: Record<MeasurementKind, string> = {
+  volume: 'Volume',
+  area: 'Area',
+  length: 'Length / distance',
+  height: 'Height / elevation',
+  other: 'Other',
+};
+
+export const MEASUREMENT_DEFAULT_UNITS: Record<MeasurementKind, string> = {
+  volume: 'm³',
+  area: 'm²',
+  length: 'm',
+  height: 'm',
+  other: '',
+};
+
+/** A measurement taken from the photogrammetry products (stockpile volume,
+ *  roof area, building height, setback…). */
+export interface MeasurementEntry {
+  id: string;
+  kind: MeasurementKind;
+  /** What was measured ("Stockpile A", "Main roof", "Front setback"). */
+  feature: string;
+  value: number | null;
+  unit: string;
+  /** How it was measured, tolerance, remarks. */
+  method: string;
+  /** PhotogrammetryEntry.id of the figure that shows it. */
+  figureId: string | null;
+}
+
 export interface PhotogrammetryReport extends ReportBase {
   kind: 'photogrammetry';
   projectName: string;
+  clientName: string;
+  /** Pilot information beyond the name: licence / certification, contact. */
+  pilotCredentials: string;
+  pilotContact: string;
   /** Objective / scope of the survey. */
   surveyPurpose: string;
+  // ---- Environmental conditions (weather is on the base) ----
+  windConditions: string;
+  lighting: string;
+  // ---- Hardware, software & accuracy ----
+  /** Camera / sensor the imagery was taken with. */
+  cameraSensor: string;
+  /** Photogrammetry software and version used for processing. */
+  software: string;
+  imageCount: number | null;
+  imagesAligned: number | null;
+  flightAltitudeM: number | null;
+  /** Ground sampling distance in cm per pixel. */
+  gsdCmPx: number | null;
+  gcpCount: number | null;
+  /** Root mean square error of the control / check points, in cm. */
+  rmseCm: number | null;
+  /** Coordinate reference system of the deliverables. */
+  crs: string;
   /** Software, GSD, accuracy, control points… */
   processingNotes: string;
+  /** Deliverables produced (or not), with specifications and links. */
+  deliverables: DeliverableEntry[];
   /** Ordered figures (photos / video frames with annotations). */
   figures: PhotogrammetryEntry[];
   /** Imported Metashape deliverables (asset ids) listed in the Outputs section. */
   outputAssetIds: number[];
+  measurements: MeasurementEntry[];
   findings: PhotogrammetryFinding[];
   observations: PhotogrammetryObservation[];
   conclusions: string;
@@ -615,9 +711,13 @@ const EMPTY_REPORT_BASE: Omit<ReportBase, 'kind'> = {
   version: 1,
   propertyAddress: '',
   inspectionDate: '',
+  inspectionTime: '',
+  sitePosition: '',
   weatherConditions: '',
   inspectorName: '',
   summary: '',
+  droneModel: '',
+  droneSerial: '',
   orthomosaicLink: '',
   linkedFlights: [],
   orthoAssetId: null,
@@ -626,7 +726,6 @@ const EMPTY_REPORT_BASE: Omit<ReportBase, 'kind'> = {
 export const EMPTY_THERMAL_REPORT: ThermalReport = {
   ...EMPTY_REPORT_BASE,
   kind: 'thermal',
-  inspectionTime: '',
   inspectorCredentials: '',
   inspectorContact: '',
   cameraMake: '',
@@ -651,10 +750,26 @@ export const EMPTY_PHOTOGRAMMETRY_REPORT: PhotogrammetryReport = {
   ...EMPTY_REPORT_BASE,
   kind: 'photogrammetry',
   projectName: '',
+  clientName: '',
+  pilotCredentials: '',
+  pilotContact: '',
   surveyPurpose: '',
+  windConditions: '',
+  lighting: '',
+  cameraSensor: '',
+  software: '',
+  imageCount: null,
+  imagesAligned: null,
+  flightAltitudeM: null,
+  gsdCmPx: null,
+  gcpCount: null,
+  rmseCm: null,
+  crs: '',
   processingNotes: '',
+  deliverables: [],
   figures: [],
   outputAssetIds: [],
+  measurements: [],
   findings: [],
   observations: [],
   conclusions: '',

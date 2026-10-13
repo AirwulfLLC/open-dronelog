@@ -7,7 +7,7 @@
  * kind-specific sections stay in that kind's module.
  */
 
-import type { FlightSnapshot, PhotogrammetryEntry, ReportBase } from '@/types/thermal';
+import type { FlightSnapshot, PhotogrammetryEntry } from '@/types/thermal';
 import type { PhotogrammetryFigure } from '@/lib/photogrammetryExport';
 import type { EditRef, ReportWriter } from './writer';
 
@@ -92,22 +92,6 @@ export const PHOTOGRAMMETRY_HEADER_LABELS: HeaderLabels = {
   weather: 'Weather Conditions',
   person: 'Pilot / Operator',
 };
-
-export function headerData(
-  w: ReportWriter,
-  r: ReportBase,
-  labels: HeaderLabels,
-  extraRows: Array<[key: string, value: string, edit?: EditRef]> = [],
-): void {
-  w.sectionHeading('Header Data');
-  for (const [k, v, e] of extraRows) w.kv(k, v, e);
-  w.kv(labels.address, r.propertyAddress, edit('propertyAddress', true));
-  // The date is an ISO value behind a date picker — free text would break it
-  w.kv(labels.date, r.inspectionDate);
-  w.kv(labels.weather, r.weatherConditions, edit('weatherConditions', true));
-  w.kv(labels.person, r.inspectorName, edit('inspectorName', true));
-  w.space(3);
-}
 
 // ---------------------------------------------------------------------------
 // Shared section: linked DJI flights

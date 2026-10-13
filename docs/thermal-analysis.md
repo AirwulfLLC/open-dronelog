@@ -264,8 +264,9 @@ pairs, executive summary and findings, recommendations and follow-up,
 limitations):
 
 1. **Header Data & Administrative Information** — property address,
-   inspection date and time, inspector/thermographer with credentials and
-   contact details, camera make, model and serial number (*Fill camera from
+   inspection date and time, site position and aircraft (from the linked
+   flight logs), inspector/thermographer with credentials and contact
+   details, camera make, model and serial number (*Fill camera from
    imagery* reads them from the pictures' EXIF data), asset IDs/tags covered,
    and the executive summary. The thermographer's details and camera of the
    last saved or exported report are remembered per profile and prefilled
@@ -308,27 +309,57 @@ limitations):
     reflected temperature and the severity grades, and a disclaimer; edit
     freely or restore the standard text.
 
-**Photogrammetry Survey Report** (Photogrammetry tab):
+**Flight logs feed both reports.** Linking a flight in **Flight Data (DJI)**
+fills the survey date, the flight time window (first take-off to last
+landing), the site position (the home point) and the aircraft (model, name,
+serial) from the DJI log; the photogrammetry report also takes the image
+count and the flight altitude. Each further link refreshes what the logs
+filled (the window widens, the image count grows) and leaves anything you
+typed alone; **↻ Fill from flight logs** re-applies everything.
 
-1. **Header Data** — project name, site address, survey date, weather,
-   pilot/operator, summary.
+**Photogrammetry Survey Report** (Photogrammetry tab) — follows the structure
+of a real-estate photogrammetry report (project metadata and technical
+specifications, core visual deliverables, topographical data, analysis and
+measurements, inspection notes):
+
+1. **Header Data & Project Metadata** — project name, client, site address,
+   survey date, flight time, site position, pilot/operator with credentials
+   and contact, summary.
 2. **Survey Scope** — objective, area of interest, accuracy, deliverables.
-3. **Flight Data (DJI)** — as above.
-4. **Photogrammetry Outputs (Agisoft Metashape)** — embedded orthomosaic +
-   link, and a checklist of the imported Metashape deliverables to list in
-   the report (the library is shared with the Thermal Studio, so only ticked
-   files appear and travel in the report's bundle).
-5. **Processing Notes** — software, alignment, GSD, control points, CRS.
-6. **Survey Imagery** — the Photogrammetry tab's queued figures in queue
+3. **Environmental Conditions** — weather, wind and lighting during the
+   flight.
+4. **Flight Data (DJI)** — as above.
+5. **Hardware, Software & Accuracy** — aircraft and serial, camera/sensor,
+   processing software, images captured and aligned, flight altitude, GSD,
+   ground control points, RMSE and coordinate reference system. *Fill from
+   flights & imagery* reads the aircraft, image count and altitude from the
+   flight logs, the camera from the photos' EXIF data, and the aligned camera
+   count and CRS from an imported Metashape camera file.
+6. **Processing Notes** — alignment, dense cloud, mesh and texture settings,
+   control point residuals.
+7. **Core Visual Deliverables (Agisoft Metashape)** — the embedded
+   orthomosaic + map link, the checklist of imported Metashape files to list
+   in the report (the library is shared with the Thermal Studio, so only
+   ticked files appear and travel in the report's bundle), and structured
+   rows for the **orthomosaic map, 3D point cloud and 3D textured mesh**
+   (status, specification, where hosted; *From imported files* seeds them
+   from the library — an OBJ counts as a mesh).
+8. **Topographical & Elevation Data** — rows for **DEM/DSM, DTM and contour
+   line maps** with resolution, interval and format.
+9. **Survey Imagery** — the Photogrammetry tab's queued figures in queue
    order, each with annotations, caption and provenance line (file, capture
    time, camera, position; video frame time).
-7. **Findings & Observations** — numbered findings with category
-   (structural defect, surface deterioration, vegetation, erosion/drainage,
-   obstruction, survey note), severity, location, linked figure, observation
-   and recommendation; plus **observations** (`+ Add observation`) — neutral,
-   ungraded notes on what the imagery showed, with location and linked
-   figure, listed after the findings.
-8. **Conclusions & Recommendations** — narrative plus the severity summary.
+10. **Advanced Analysis & Measurements** — volumetric, area, length and
+    height measurements (stockpiles, roof areas, boundaries, building
+    heights, setbacks) with value, unit, method and the figure that shows
+    them.
+11. **Findings & Observations (Asset Inspection Notes)** — numbered findings
+    with category (structural defect, surface deterioration, vegetation,
+    erosion/drainage, obstruction, survey note), severity, location, linked
+    figure, observation and recommendation; plus **observations**
+    (`+ Add observation`) — neutral, ungraded notes on what the imagery
+    showed, with location and linked figure, listed after the findings.
+12. **Conclusions & Recommendations** — narrative plus the severity summary.
 
 **✨ AI draft** — sections whose text can be composed from the data entered
 (Executive Summary, Anomalies & Findings, Action Plan and Follow-Up &

@@ -35,7 +35,7 @@ import { ReportShell, type PreviewEditResult } from './ReportShell';
 import { HeaderSection } from './sections/HeaderSection';
 import { ThermalAdminFields } from './sections/AdministrativeFields';
 import { ConditionsActions, ConditionsSection } from './sections/ConditionsSection';
-import { FlightDataSection } from './sections/FlightDataSection';
+import { makeFlightDataSection } from './sections/FlightDataSection';
 import { OrthomosaicSection } from './sections/OrthomosaicSection';
 import { ThermalImagingActions, ThermalImagingSection } from './sections/ThermalImagingSection';
 import { AnomaliesActions, AnomaliesSection } from './sections/AnomaliesSection';
@@ -73,13 +73,18 @@ const flightFacts = (r: ThermalReport) =>
 
 const adminFacts = (r: ThermalReport) => ({
   propertyAddress: r.propertyAddress,
+  sitePosition: r.sitePosition || undefined,
   inspectionDate: r.inspectionDate,
   inspectionTime: r.inspectionTime || undefined,
   inspector: r.inspectorName,
   credentials: r.inspectorCredentials || undefined,
+  aircraft: r.droneModel || undefined,
   camera: [r.cameraMake, r.cameraModel].filter(Boolean).join(' ') || undefined,
   assetTags: r.assetTags || undefined,
 });
+
+/** Flight logs fill the base fields (date, time window, site, aircraft); nothing thermal-specific. */
+const thermalFlights = makeFlightDataSection<ThermalReport>();
 
 const conditionFacts = (r: ThermalReport) => ({
   weather: r.weatherConditions || undefined,
@@ -160,7 +165,12 @@ const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
     Component: ConditionsSection,
     Actions: ConditionsActions,
   },
-  { key: 'flights', title: 'Flight Data (DJI)', Component: FlightDataSection },
+  {
+    key: 'flights',
+    title: 'Flight Data (DJI)',
+    Component: thermalFlights.Component,
+    Actions: thermalFlights.Actions,
+  },
   {
     key: 'ortho',
     title: 'Orthomosaic (Agisoft Metashape)',

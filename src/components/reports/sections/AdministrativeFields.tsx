@@ -72,12 +72,38 @@ export function ThermalAdminFields({ report, update, setNotice }: SectionProps<T
   return (
     <>
       <div>
-        <label className={labelCls}>Inspection time</label>
+        <label className={labelCls}>Inspection time (from the flight logs)</label>
         <input
           className={inputCls}
           value={report.inspectionTime}
           onChange={(e) => update({ inspectionTime: e.target.value })}
           placeholder="09:30–11:15"
+        />
+      </div>
+      <div>
+        <label className={labelCls}>Site position (from the flight logs)</label>
+        <input
+          className={inputCls}
+          value={report.sitePosition}
+          onChange={(e) => update({ sitePosition: e.target.value })}
+          placeholder="41.110300, -85.211000"
+        />
+      </div>
+      <div>
+        <label className={labelCls}>Aircraft (from the flight logs)</label>
+        <input
+          className={inputCls}
+          value={report.droneModel}
+          onChange={(e) => update({ droneModel: e.target.value })}
+          placeholder="Matrice 30T"
+        />
+      </div>
+      <div>
+        <label className={labelCls}>Aircraft serial number</label>
+        <input
+          className={inputCls}
+          value={report.droneSerial}
+          onChange={(e) => update({ droneSerial: e.target.value })}
         />
       </div>
       <div>

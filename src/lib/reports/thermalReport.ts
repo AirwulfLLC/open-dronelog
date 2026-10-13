@@ -112,9 +112,12 @@ export function renderThermalReport(w: ReportWriter, report: ThermalReport, p: T
   // The date is an ISO value behind a date picker — free text would break it
   w.kv('Inspection Date', report.inspectionDate);
   kvOpt('Inspection Time', report.inspectionTime, 'inspectionTime');
+  kvOpt('Site Position', report.sitePosition, 'sitePosition');
   w.kv('Inspector / Thermographer', report.inspectorName, edit('inspectorName', true));
   kvOpt('Credentials', report.inspectorCredentials, 'inspectorCredentials');
   kvOpt('Contact', report.inspectorContact, 'inspectorContact');
+  kvOpt('Aircraft', report.droneModel, 'droneModel');
+  kvOpt('Aircraft Serial Number', report.droneSerial, 'droneSerial');
   kvOpt('Camera Make', report.cameraMake, 'cameraMake');
   kvOpt('Camera Model', report.cameraModel, 'cameraModel');
   kvOpt('Camera Serial Number', report.cameraSerial, 'cameraSerial');
