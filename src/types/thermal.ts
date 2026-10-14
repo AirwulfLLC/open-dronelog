@@ -106,13 +106,77 @@ export function assetMimeType(asset: ThermalAsset): string {
   return 'image/jpeg';
 }
 
+/** True when the importer generated a PNG preview for the file (GeoTIFFs,
+ *  radiometric TIFF/CSV imports), which the preview endpoint then serves. */
+export function hasPreviewFile(asset: ThermalAsset): boolean {
+  if (!asset.metaJson) return false;
+  try {
+    return typeof (JSON.parse(asset.metaJson) as { previewFile?: unknown }).previewFile === 'string';
+  } catch {
+    return false;
+  }
+}
+
 /** MIME type of the bytes the preview endpoint serves: GeoTIFF-backed
- *  Metashape images come back as their PNG preview, everything else as the
- *  original file. */
+ *  Metashape images and radiometric TIFF/CSV imports come back as their PNG
+ *  preview, everything else as the original file. */
 export function previewMimeType(asset: ThermalAsset): string {
-  return asset.source === 'metashape' && asset.assetType === 'image'
-    ? 'image/png'
-    : assetMimeType(asset);
+  if (asset.source === 'metashape' && asset.assetType === 'image') return 'image/png';
+  if (hasPreviewFile(asset)) return 'image/png';
+  return assetMimeType(asset);
+}
+
+/** How a radiometric picture's temperatures are read. */
+export type RadiometricFormat = 'flir' | 'dji' | 'autel_tiff' | 'float_tiff' | 'temperature_csv';
+
+export const RADIOMETRIC_FORMAT_LABELS: Record<RadiometricFormat, string> = {
+  flir: 'FLIR R-JPEG',
+  dji: 'DJI R-JPEG',
+  autel_tiff: 'Autel radiometric TIFF',
+  float_tiff: 'Radiometric TIFF',
+  temperature_csv: 'Temperature matrix (CSV)',
+};
+
+/** The importer's record of a radiometric picture: format, vendor, camera. */
+export interface RadiometricMeta {
+  format: RadiometricFormat;
+  vendor?: string;
+  camera?: string;
+  cameraSerial?: string;
+  lens?: string;
+  note?: string;
+}
+
+/** True when the picture's temperatures are computed from raw counts with
+ *  measurement parameters (emissivity, distance, reflected temperature…):
+ *  DJI and FLIR-format R-JPEGs. TIFF/CSV imports and index rasters hold
+ *  values the vendor tool already computed — nothing to re-measure. */
+export function hasMeasurementParams(asset: ThermalAsset): boolean {
+  if (!asset.isRadiometric || asset.source === 'metashape') return false;
+  const rad = parseRadiometricMeta(asset);
+  // Pictures imported before the format was recorded are DJI R-JPEGs
+  return rad == null || rad.format === 'flir' || rad.format === 'dji';
+}
+
+export function parseRadiometricMeta(asset: ThermalAsset): RadiometricMeta | null {
+  if (asset.source === 'metashape' || !asset.metaJson) return null;
+  try {
+    const r = (JSON.parse(asset.metaJson) as { radiometric?: Record<string, unknown> }).radiometric;
+    if (!r || typeof r.format !== 'string' || !Object.prototype.hasOwnProperty.call(RADIOMETRIC_FORMAT_LABELS, r.format)) {
+      return null;
+    }
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    return {
+      format: r.format as RadiometricFormat,
+      vendor: str(r.vendor),
+      camera: str(r.camera),
+      cameraSerial: str(r.cameraSerial),
+      lens: str(r.lens),
+      note: str(r.note),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Unit suffix for measured values on this asset ('' for unitless indices). */

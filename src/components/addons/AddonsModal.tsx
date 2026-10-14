@@ -27,9 +27,9 @@ const CATALOG: CatalogEntry[] = [
     name: 'Thermal Analysis Studio',
     feature: 'thermal',
     description:
-      'DJI radiometric image analysis: temperature statistics and isotherms, range isolation, AI variance analysis, heat-flow networks, Metashape orthomosaics and thermal inspection reports.',
+      'Radiometric image analysis for DJI, Teledyne FLIR, Skydio and Autel thermal cameras: temperature statistics and isotherms, range isolation, AI variance analysis, heat-flow networks, Metashape orthomosaics and thermal inspection reports.',
     installerName: 'OpenDroneLog-Thermal-Addon_<version>_x64-setup.exe',
-    note: 'Includes the DJI Thermal SDK runtime.',
+    note: 'Includes the DJI Thermal SDK runtime. FLIR-format R-JPEGs (Teledyne FLIR, Skydio X10, Autel 640R), Autel 640T radiometric TIFFs and temperature CSVs are read natively.',
   },
   {
     id: 'photogrammetry',

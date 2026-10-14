@@ -9,7 +9,7 @@ open-source core).
 
 | Add-on | Installer | Provides |
 |---|---|---|
-| **Thermal Analysis Studio** | `OpenDroneLog-Thermal-Addon_<version>_x64-setup.exe` | The Thermal tab (see [thermal-analysis.md](thermal-analysis.md)) and the DJI Thermal SDK runtime |
+| **Thermal Analysis Studio** | `OpenDroneLog-Thermal-Addon_<version>_x64-setup.exe` | The Thermal tab (see [thermal-analysis.md](thermal-analysis.md)) and the DJI Thermal SDK runtime; FLIR, Skydio and Autel formats are read natively |
 | **Photogrammetry** | `OpenDroneLog-Photogrammetry-Addon_<version>_x64-setup.exe` | The Photogrammetry tab (photo/video library, Metashape deliverables, survey reports) |
 
 ## Installing

@@ -47,8 +47,10 @@ export async function getThermalSdkStatus(): Promise<ThermalSdkStatus> {
 }
 
 /** Library an import is filed under. Omitted = auto (thermal media / Metashape
- *  exports); 'photogrammetry' = visual photos/videos for the photogrammetry tab. */
-export type AssetSourceOverride = 'photogrammetry';
+ *  exports); 'photogrammetry' = visual photos/videos for the photogrammetry tab;
+ *  'radiometric' = a temperature file for the thermal library (Autel
+ *  radiometric TIFF, temperature-matrix CSV, R-JPEG) whatever its extension. */
+export type AssetSourceOverride = 'photogrammetry' | 'radiometric';
 
 export async function importThermalAsset(
   filePath: string,

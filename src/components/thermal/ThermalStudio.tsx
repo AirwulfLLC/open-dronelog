@@ -18,7 +18,13 @@ import { ThermalReportBuilder } from '@/components/reports/ThermalReportBuilder'
 import { ColorPicker } from './ColorPicker';
 import { MetashapeDocCard } from './MetashapeDocCard';
 import { AssetNameEditor } from './AssetNameEditor';
-import { METASHAPE_KIND_LABELS, hasDisplayableImage, parseMetashapeMeta } from '@/types/thermal';
+import {
+  METASHAPE_KIND_LABELS,
+  RADIOMETRIC_FORMAT_LABELS,
+  hasDisplayableImage,
+  parseMetashapeMeta,
+  parseRadiometricMeta,
+} from '@/types/thermal';
 import { isWebMode } from '@/lib/api';
 import type { AnnotationTool, ThermalAsset } from '@/types/thermal';
 
@@ -215,6 +221,26 @@ export function ThermalStudio() {
     [importFiles, selectedAsset],
   );
 
+  // Temperature files whose extension alone would route them to the
+  // Metashape library: Autel radiometric TIFFs and CSV matrices exported from
+  // a vendor tool (FLIR Thermal Studio, Autel IR tool…), plus R-JPEGs
+  const importRadiometric = useCallback(async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({
+        multiple: true,
+        title: 'Import radiometric data',
+        filters: [
+          { name: 'Radiometric data (TIFF, CSV, R-JPEG)', extensions: ['tif', 'tiff', 'csv', 'txt', 'jpg', 'jpeg'] },
+        ],
+      });
+      const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
+      if (paths.length > 0) await importFiles(paths.map((path) => ({ path })), 'radiometric');
+    } catch (e) {
+      window.alert(`Import failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }, [importFiles]);
+
   if (!isThermalSupported()) {
     return (
       <div className="w-full h-full flex items-center justify-center p-8">
@@ -247,11 +273,21 @@ export function ThermalStudio() {
                   ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40'
                   : 'bg-red-500/10 text-red-300 border-red-500/40'
               }`}
-              title={sdkStatus.available ? `SDK: ${sdkStatus.sdkDir}` : sdkStatus.error ?? ''}
+              title={
+                sdkStatus.available
+                  ? `DJI R-JPEGs are measured through the DJI Thermal SDK (${sdkStatus.sdkDir})`
+                  : `${sdkStatus.error ?? 'DJI Thermal SDK not found'} — DJI R-JPEGs cannot be measured until the Thermal add-on's SDK runtime is present`
+              }
             >
-              {sdkStatus.available ? 'DJI Thermal SDK ready' : 'SDK unavailable'}
+              {sdkStatus.available ? 'DJI Thermal SDK ready' : 'DJI SDK unavailable'}
             </span>
           )}
+          <span
+            className="px-2 py-0.5 rounded-full text-[10px] font-medium border bg-sky-500/10 text-sky-300 border-sky-500/40"
+            title="Read natively, no SDK needed: FLIR-format radiometric JPEGs (verified on Teledyne FLIR files; the Skydio X10 and Autel EVO II Dual 640R write the same FLIR Boson format according to the vendors), Autel 640T radiometric TIFFs, and per-pixel temperature CSVs exported from any thermography tool"
+          >
+            FLIR · Skydio · Autel built in
+          </span>
           {isAnalyzing && (
             <span className="text-[11px] text-sky-300 animate-pulse">Processing…</span>
           )}
@@ -264,6 +300,14 @@ export function ThermalStudio() {
             className="px-3 py-1.5 rounded-lg bg-drone-primary hover:bg-drone-primary/80 text-white text-xs font-medium disabled:opacity-50"
           >
             {isImporting ? 'Importing…' : '+ Import photos / videos'}
+          </button>
+          <button
+            onClick={importRadiometric}
+            disabled={isImporting}
+            className="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium disabled:opacity-50"
+            title="Autel 640T radiometric TIFFs, per-pixel temperature CSVs exported from FLIR Thermal Studio / the Autel IR tool, or R-JPEGs"
+          >
+            🌡 Radiometric file…
           </button>
 
           {/* Report submenu */}
@@ -354,7 +398,7 @@ export function ThermalStudio() {
           <div className="flex-1 min-h-0 overflow-y-auto">
             {libraryAssets.length === 0 && (
               <div className="p-3 text-[11px] text-gray-500">
-                No thermal assets yet. Import DJI radiometric JPEGs (R-JPEG) or
+                No thermal assets yet. Import radiometric JPEGs (DJI, FLIR, Skydio, Autel) or
                 visual photos/videos to get started.
               </div>
             )}
@@ -477,8 +521,27 @@ export function ThermalStudio() {
                   </button>
                 </span>
                 {selectedAsset.cameraModel && <span>{selectedAsset.cameraModel}</span>}
+                {(() => {
+                  // The FLIR data's camera model, serial and lens (the model
+                  // only when the EXIF line above does not already say it),
+                  // or how a TIFF/CSV import was interpreted
+                  const rad = parseRadiometricMeta(selectedAsset);
+                  if (!rad) return null;
+                  const camera = rad.camera && rad.camera !== selectedAsset.cameraModel ? rad.camera : '';
+                  const line = [camera, rad.cameraSerial ? `S/N ${rad.cameraSerial}` : '', rad.lens ? `lens ${rad.lens}` : '']
+                    .filter(Boolean)
+                    .join(' · ');
+                  return (
+                    <>
+                      {line && <span>{line}</span>}
+                      {rad.note && <span title="How the file's values were read">{rad.note}</span>}
+                    </>
+                  );
+                })()}
                 {selectedAsset.isRadiometric ? (
-                  <span className="text-emerald-400">Radiometric · {selectedAsset.width}×{selectedAsset.height}</span>
+                  <span className="text-emerald-400">
+                    {assetSubtitle(selectedAsset)}
+                  </span>
                 ) : (
                   <span>Not radiometric</span>
                 )}
@@ -537,7 +600,11 @@ function assetSubtitle(asset: ThermalAsset): string {
     const meta = parseMetashapeMeta(asset);
     return meta ? METASHAPE_KIND_LABELS[meta.kind] ?? meta.kind : 'Metashape export';
   }
-  if (asset.isRadiometric) return `Radiometric ${asset.width}×${asset.height}`;
+  if (asset.isRadiometric) {
+    const rad = parseRadiometricMeta(asset);
+    const how = rad ? RADIOMETRIC_FORMAT_LABELS[rad.format] : 'Radiometric';
+    return `${how} ${asset.width}×${asset.height}`;
+  }
   return asset.assetType === 'video' ? 'Video' : 'Image';
 }
 

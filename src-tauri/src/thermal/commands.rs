@@ -47,16 +47,33 @@ pub(crate) fn sanitize_file_name(name: &str) -> String {
         .collect()
 }
 
-/// Asset source the caller may force instead of auto-classification. Only the
+/// Asset source the caller may force instead of auto-classification. The
 /// photogrammetry library uses this: its photos/videos are plain visual media
 /// that must never be probed as radiometric or mixed into the thermal library.
 const SOURCE_PHOTOGRAMMETRY: &str = "photogrammetry";
+/// Explicit radiometric import into the thermal library: an Autel 640T
+/// radiometric TIFF, a temperature-matrix CSV exported from a vendor tool, or
+/// an R-JPEG — files whose extension alone would route them elsewhere.
+const SOURCE_RADIOMETRIC: &str = "radiometric";
 
 fn validate_source_override(source: Option<&str>) -> Result<Option<&str>, String> {
     match source {
         None | Some("") => Ok(None),
         Some(SOURCE_PHOTOGRAMMETRY) => Ok(Some(SOURCE_PHOTOGRAMMETRY)),
+        Some(SOURCE_RADIOMETRIC) => Ok(Some(SOURCE_RADIOMETRIC)),
         Some(other) => Err(format!("Unknown asset source: {other}")),
+    }
+}
+
+/// The DJI-style measurement overrides mapped onto the FLIR model (the UI's
+/// humidity is a percentage, FLIR's a fraction).
+fn flir_overrides(o: &MeasureOverrides) -> super::flir::Overrides {
+    super::flir::Overrides {
+        emissivity: o.emissivity,
+        object_distance_m: o.distance,
+        reflected_temp_c: o.reflection,
+        atmospheric_temp_c: o.ambient_temp,
+        relative_humidity: o.humidity.map(|h| h / 100.0),
     }
 }
 
@@ -74,18 +91,58 @@ fn import_asset_impl(
     let db = state.db_authenticated()?;
     let source_override = validate_source_override(source_override)?;
 
-    // Classify: thermal media first, then Metashape artifacts
-    let (asset_type, source, metashape_kind) = match (source_override, super::asset_type_for(file_name)) {
-        (Some(forced), Some(t)) => (t, forced, None),
+    // Classify: thermal media first, then Metashape artifacts. `radiometric_file`
+    // names a TIFF/CSV temperature file decoded here rather than by an SDK.
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    // A .tif/.csv imported without a source is a Metashape export unless it
+    // decodes, unmistakably, as a thermal frame in °C — decoded once, here
+    let mut auto_grid: Option<super::radiometric::TemperatureGrid> = if source_override.is_none() {
+        match ext.as_str() {
+            "tif" | "tiff" if super::radiometric::looks_like_thermal_frame(&bytes) => {
+                super::radiometric::read_radiometric_tiff(&bytes, super::radiometric::Origin::AutoDetected).ok()
+            }
+            "csv" => super::radiometric::parse_temperature_csv(
+                &String::from_utf8_lossy(&bytes),
+                super::radiometric::Origin::AutoDetected,
+            )
+            .ok(),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let (asset_type, source, metashape_kind, radiometric_file) = match (source_override, super::asset_type_for(file_name)) {
+        // Explicit radiometric import: an R-JPEG takes the normal probes
+        (Some(SOURCE_RADIOMETRIC), Some("image")) => ("image", "thermal", None, None),
+        (Some(SOURCE_RADIOMETRIC), _) => match ext.as_str() {
+            "tif" | "tiff" => ("image", "thermal", None, Some("tiff")),
+            "csv" | "txt" => ("image", "thermal", None, Some("csv")),
+            _ => {
+                return Err(format!(
+                    "Unsupported radiometric file: {file_name} (accepted: radiometric TIFF, \
+                     temperature-matrix CSV, R-JPEG)"
+                ))
+            }
+        },
+        (Some(forced), Some(t)) => (t, forced, None, None),
         (Some(_), None) => {
             return Err(format!(
                 "Unsupported file type: {file_name} (photogrammetry imports accept jpg/png photos \
                  and mp4/mov/avi videos)"
             ))
         }
-        (None, Some(t)) => (t, "thermal", None),
+        (None, Some(t)) => (t, "thermal", None, None),
         (None, None) => match super::metashape::detect_kind(file_name) {
-            Some((kind, viewer_type)) => (viewer_type, "metashape", Some(kind)),
+            // A camera's radiometric TIFF is a small, ungeoreferenced
+            // single-band frame of temperatures — not a Metashape orthomosaic
+            Some(("orthomosaic", _)) if auto_grid.is_some() => ("image", "thermal", None, Some("tiff")),
+            // A per-pixel temperature matrix is a CSV too, unlike a camera reference file
+            Some(("reference_csv", _)) if auto_grid.is_some() => ("image", "thermal", None, Some("csv")),
+            Some((kind, viewer_type)) => (viewer_type, "metashape", Some(kind), None),
             None => {
                 return Err(format!(
                     "Unsupported file type: {file_name} (supported: jpg/png/mp4/mov/avi, and \
@@ -106,17 +163,59 @@ fn import_asset_impl(
         ));
     }
 
-    // Probe radiometric data + resolution for thermal images
+    // Probe radiometric data + resolution for thermal images. FLIR-format
+    // R-JPEGs (Teledyne FLIR, Skydio X10, Autel 640R) are read natively, DJI
+    // R-JPEGs through the DJI Thermal SDK; TIFF/CSV temperature files are
+    // decoded here and kept as a raster sidecar.
     let mut is_radiometric = false;
     let mut width = 0i32;
     let mut height = 0i32;
+    let mut radiometric: Option<serde_json::Value> = None;
+    let mut grid: Option<super::radiometric::TemperatureGrid> = None;
     if source == "thermal" && asset_type == "image" {
-        if let Ok(m) = sdk::measure(&bytes, MeasureOverrides::default()) {
+        if let Some(kind) = radiometric_file {
+            // Auto-detected files were decoded for the classification; an
+            // explicit import is decoded now, on the user's word that the
+            // file holds temperatures
+            let g = match auto_grid.take() {
+                Some(g) => g,
+                None if kind == "csv" => super::radiometric::parse_temperature_csv(
+                    &String::from_utf8_lossy(&bytes),
+                    super::radiometric::Origin::Explicit,
+                )?,
+                None => super::radiometric::read_radiometric_tiff(&bytes, super::radiometric::Origin::Explicit)?,
+            };
+            is_radiometric = true;
+            width = g.width as i32;
+            height = g.height as i32;
+            let mut rad = serde_json::json!({ "format": g.format, "note": g.note });
+            if g.format == "autel_tiff" {
+                rad["vendor"] = serde_json::json!("Autel Robotics");
+            }
+            radiometric = Some(rad);
+            grid = Some(g);
+        } else if let Ok(flir) = super::flir::parse(&bytes) {
+            is_radiometric = true;
+            width = flir.width as i32;
+            height = flir.height as i32;
+            radiometric = Some(serde_json::json!({
+                "format": "flir",
+                "camera": flir.info.camera_model,
+                "cameraSerial": flir.info.camera_serial,
+                "lens": flir.info.lens_model,
+                "rangeMinC": flir.info.range_min_c,
+                "rangeMaxC": flir.info.range_max_c,
+            }));
+        } else if let Ok(m) = sdk::measure(&bytes, MeasureOverrides::default()) {
             is_radiometric = true;
             width = m.width as i32;
             height = m.height as i32;
+            radiometric = Some(serde_json::json!({ "format": "dji" }));
         } else {
             is_radiometric = sdk::is_radiometric(&bytes);
+            if is_radiometric {
+                radiometric = Some(serde_json::json!({ "format": "dji" }));
+            }
         }
     }
 
@@ -218,6 +317,43 @@ fn import_asset_impl(
         if let Some(serial) = &exif.camera_serial {
             meta.insert("cameraSerial".to_string(), serde_json::json!(serial));
         }
+        // How the temperatures are read, and by whose camera (exported
+        // TIFF/CSV matrices name no vendor)
+        if let Some(mut rad) = radiometric.take() {
+            let from_camera = rad["format"] == "flir" || rad["format"] == "dji";
+            if from_camera && rad.get("vendor").is_none() {
+                let vendor = exif.camera_make.clone().unwrap_or_else(|| {
+                    if rad["format"] == "flir" { "Teledyne FLIR".to_string() } else { "DJI".to_string() }
+                });
+                rad["vendor"] = serde_json::json!(vendor);
+            }
+            meta.insert("radiometric".to_string(), rad);
+        }
+        // Temperatures decoded from a TIFF/CSV: an f32 raster sidecar feeds
+        // the analysis pipeline, a palette-rendered PNG stands in for the
+        // undisplayable original
+        if let Some(g) = &grid {
+            let raster_name = format!("{id}_raster.f32");
+            let raster_path = folder.join(&raster_name);
+            if let Err(e) = std::fs::write(&raster_path, super::radiometric::raster_bytes(g)) {
+                let _ = std::fs::remove_file(&stored_path);
+                return Err(format!("Failed to write the temperature raster: {e}"));
+            }
+            extra_files.push(raster_path.clone());
+            let preview = match super::radiometric::write_preview(g, &folder, &format!("{id}")) {
+                Ok(name) => name,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&stored_path);
+                    let _ = std::fs::remove_file(&raster_path);
+                    return Err(e);
+                }
+            };
+            extra_files.push(folder.join(&preview));
+            meta.insert("rasterFile".to_string(), serde_json::json!(raster_name));
+            meta.insert("previewFile".to_string(), serde_json::json!(preview));
+            meta.insert("width".to_string(), serde_json::json!(g.width));
+            meta.insert("height".to_string(), serde_json::json!(g.height));
+        }
         if !meta.is_empty() {
             meta_json = Some(serde_json::Value::Object(meta).to_string());
         }
@@ -302,6 +438,20 @@ fn load_measurement(
     }
     let bytes =
         std::fs::read(&asset.stored_path).map_err(|e| format!("Failed to read asset file: {e}"))?;
+    // FLIR-format R-JPEGs (Teledyne FLIR, Skydio X10, Autel 640R) are
+    // measured natively; DJI R-JPEGs through the DJI Thermal SDK
+    if let Some(fff) = super::flir::extract_fff(&bytes) {
+        let m = super::flir::measure_fff(&fff, &flir_overrides(&overrides))?;
+        let c = m.conditions;
+        let params = sdk::DirpMeasurementParams {
+            distance: c.object_distance_m,
+            humidity: c.relative_humidity * 100.0,
+            emissivity: c.emissivity,
+            reflection: c.reflected_temp_c,
+            ambient_temp: c.atmospheric_temp_c,
+        };
+        return Ok((m.width as usize, m.height as usize, m.temps, params));
+    }
     let m = sdk::measure(&bytes, overrides)?;
     Ok((m.width, m.height, m.temps, m.params))
 }

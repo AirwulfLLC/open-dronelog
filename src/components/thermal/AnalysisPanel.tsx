@@ -13,7 +13,7 @@ import {
   formatTemp,
   rangeStats,
 } from '@/lib/thermalPalettes';
-import { CLASSIFICATION_LABELS, parseMetashapeMeta } from '@/types/thermal';
+import { CLASSIFICATION_LABELS, hasMeasurementParams, parseMetashapeMeta } from '@/types/thermal';
 import type { AnomalyRegion, ThermalAsset } from '@/types/thermal';
 import { NetworkPanel } from './NetworkPanel';
 
@@ -74,6 +74,8 @@ export function AnalysisPanel() {
   const fmt = (v: number | null | undefined) => formatTemp(v, valueSuffix);
   const deg = valueSuffix === '' ? '' : '°';
   const selectedAssetForInfo = assets.find((a) => a.id === selectedAssetId) ?? null;
+  // Only pictures measured from raw counts (DJI / FLIR R-JPEGs) have parameters to change
+  const measurable = selectedAssetForInfo != null && hasMeasurementParams(selectedAssetForInfo);
 
   const colorBarRef = useRef<HTMLCanvasElement>(null);
   const [zThreshold, setZThreshold] = useState(2.0);
@@ -265,10 +267,11 @@ export function AnalysisPanel() {
         )}
       </Section>
 
-      {/* Measurement parameters — SDK physics, meaningless for index rasters.
-          Also prevents Re-measure from writing SDK overrides that would then
-          poison analysis of real thermal images. */}
-      {valueSuffix !== '' && (
+      {/* Measurement parameters — the radiometric model's inputs, meaningless
+          for index rasters and for TIFF/CSV temperature imports (their values
+          are final). Also prevents Re-measure from writing SDK overrides that
+          would then poison analysis of real thermal images. */}
+      {valueSuffix !== '' && measurable && (
       <Section title="Measurement Parameters" defaultOpen={false}>
         <div className="grid grid-cols-2 gap-2 text-[11px]">
           <label className="text-gray-400">

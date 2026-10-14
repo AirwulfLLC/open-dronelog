@@ -5,9 +5,11 @@
 //! - `commands`: Tauri commands exposed to the frontend (desktop builds)
 
 pub mod analysis;
+pub mod flir;
 pub mod metashape;
 pub mod multispectral;
 pub mod network;
+pub mod radiometric;
 pub mod sdk;
 
 #[cfg(feature = "tauri-app")]

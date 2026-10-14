@@ -145,7 +145,7 @@ const THERMAL_SECTIONS: ReportSectionDef<ThermalReport>[] = [
     Component: ThermalHeader,
     ai: {
       instruction: () =>
-        'Write the Executive Summary of this thermal inspection report: one or two short paragraphs covering the scope and method (UAV thermal imaging with a DJI radiometric camera, the equipment and conditions stated), the site, what was imaged, the primary discoveries with their locations and urgency, the overall condition with the number of anomalies by severity, and any assets that could not be inspected. Do not list every anomaly.',
+        'Write the Executive Summary of this thermal inspection report: one or two short paragraphs covering the scope and method (UAV thermal imaging with the radiometric camera, equipment and conditions stated), the site, what was imaged, the primary discoveries with their locations and urgency, the overall condition with the number of anomalies by severity, and any assets that could not be inspected. Do not list every anomaly.',
       facts: (r) => ({
         ...adminFacts(r),
         conditions: conditionFacts(r),

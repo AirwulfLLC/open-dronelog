@@ -2,6 +2,6 @@
   "id": "thermal",
   "name": "Thermal Analysis Studio",
   "version": "0.0.0",
-  "description": "DJI radiometric image analysis: temperature statistics and isotherms, range isolation, AI variance analysis, heat-flow networks, Metashape orthomosaics and thermal inspection reports. Includes the DJI Thermal SDK runtime.",
+  "description": "Radiometric image analysis for DJI, Teledyne FLIR, Skydio and Autel thermal cameras: temperature statistics and isotherms, range isolation, AI variance analysis, heat-flow networks, Metashape orthomosaics and thermal inspection reports. Includes the DJI Thermal SDK runtime; FLIR-format R-JPEGs, Autel radiometric TIFFs and temperature CSVs are read natively.",
   "provides": ["thermal"]
 }

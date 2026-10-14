@@ -21,6 +21,7 @@ import type {
 } from '@/types/thermal';
 import { EMPTY_NETWORK, hasDisplayableImage, previewMimeType, valueSuffixFor } from '@/types/thermal';
 import * as thermalApi from '@/lib/thermalApi';
+import type { AssetSourceOverride } from '@/lib/thermalApi';
 import { makeDebouncedPersister } from '@/lib/debouncedPersister';
 
 interface ThermalState {
@@ -60,7 +61,12 @@ interface ThermalState {
 
   loadSdkStatus: () => Promise<void>;
   loadAssets: () => Promise<void>;
-  importFiles: (files: Array<{ name: string; bytes: Uint8Array } | { path: string }>) => Promise<void>;
+  /** Import into the thermal library; `source: 'radiometric'` files TIFF/CSV
+   *  temperature data that would otherwise be taken for Metashape exports. */
+  importFiles: (
+    files: Array<{ name: string; bytes: Uint8Array } | { path: string }>,
+    source?: AssetSourceOverride,
+  ) => Promise<void>;
   selectAsset: (assetId: number | null) => Promise<void>;
   deleteAsset: (assetId: number) => Promise<void>;
   reanalyze: (overrides?: MeasureOverrides) => Promise<void>;
@@ -180,7 +186,7 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
     }
   },
 
-  importFiles: async (files) => {
+  importFiles: async (files, source) => {
     if (get().isImporting) return; // serialize imports — avoids concurrent backend inserts
     set({ isImporting: true, error: null });
     let firstImported: ThermalAsset | null = null;
@@ -189,8 +195,8 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
       try {
         const asset =
           'path' in f
-            ? await thermalApi.importThermalAsset(f.path)
-            : await thermalApi.importThermalAssetBytes(f.name, f.bytes);
+            ? await thermalApi.importThermalAsset(f.path, source)
+            : await thermalApi.importThermalAssetBytes(f.name, f.bytes, source);
         if (!firstImported) firstImported = asset;
       } catch (e) {
         errors.push(e instanceof Error ? e.message : String(e));

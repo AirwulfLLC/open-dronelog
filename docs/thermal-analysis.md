@@ -1,8 +1,26 @@
-# Thermal Studio — DJI Thermal Analysis
+# Thermal Studio — Thermal Analysis
 
-Open DroneLog's **Thermal Studio** analyzes radiometric JPEGs (R-JPEG) captured
-by DJI thermal cameras — Zenmuse H20T/H20N, H30T, M30T, M3T/M3TD, M2EA, M4T,
-XT S and similar — using the official **DJI Thermal SDK** (`libdirp`).
+Open DroneLog's **Thermal Studio** analyzes radiometric imagery from the
+common drone thermal cameras:
+
+| Camera / vendor | Files | How the temperatures are read |
+|---|---|---|
+| **DJI** — Zenmuse H20T/H20N, H30T, M30T, M3T/M3TD, M2EA, M4T, XT S… | R-JPEG (`.jpg`) | The official **DJI Thermal SDK** (`libdirp`), shipped by the Thermal add-on |
+| **Teledyne FLIR** — Vue Pro R, Duo Pro R, Boson/Boson+ payloads, handhelds (E/T/SC series) | R-JPEG (`.jpg`) | **Native parser** of the FLIR FFF data embedded in the JPEG (raw counts + Planck calibration), no SDK needed — verified against FLIR sample files |
+| **Skydio X10** (VT300-L / VT300-Z, Boson+) | R-JPEG (`.jpg`, enable *RJPG* under Thermal Camera ▸ Settings on the drone) | Same FLIR-format parser: Skydio and Teledyne FLIR document the X10's R-JPEGs as FLIR-format files readable in FLIR Thermal Studio (not yet verified against an X10 file) |
+| **Autel EVO II Dual 640R** (FLIR Boson 640) | R-JPEG (`.jpg`) | Same FLIR-format parser (Autel states the 640R's files are read by FLIR tools; not yet verified against a 640R file) |
+| **Autel EVO II Dual 640T** (V1–V3) | Radiometric `.tif` (photo format *TIFF+JPG*) | **Native**: 16-bit samples in tenths of a kelvin (value × 0.1 − 273.15), the conversion established by 640T users; the companion `.irg` file is not needed |
+| **Autel EVO Max 4T/4N** and others without a public SDK | Per-pixel temperature **CSV** exported from the vendor's analysis tool (Autel IR tool, FLIR Thermal Studio…); float `.tif` in °C | **Native** matrix import |
+
+Teledyne FLIR's Atlas/File SDKs are proprietary and Autel's thermal SDK is
+not publicly documented, so those cameras are supported through their file
+formats rather than vendor libraries; everything in the studio — statistics,
+isotherms, anomaly detection, heat-flow networks, reports — works the same
+for every source. Autel's `.irg` sidecar format is undocumented and is not
+read. Measurement parameters (emissivity, distance; the stored reflected
+temperature and humidity are shown) can be changed for DJI and FLIR-format
+pictures; TIFF/CSV imports hold the temperatures the vendor tool computed,
+so their analysis panel has no parameters.
 
 > Thermal Studio is an **add-on** (see [add-ons.md](add-ons.md)): install the
 > Thermal add-on and its tab appears in the sidebar. It is desktop-only
@@ -51,8 +69,22 @@ At runtime the app searches for `libdirp.dll` / `libdirp.so` in this order:
 
 - Drag & drop or use **Import photos / videos** — accepts `.jpg/.jpeg/.png`
   images and `.mp4/.mov/.avi` videos.
-- R-JPEGs are detected automatically (radiometric badge in the asset list);
-  EXIF GPS position, capture time and camera model are extracted.
+- R-JPEGs are detected automatically, whichever vendor wrote them (the asset
+  list shows the format: *DJI R-JPEG*, *FLIR R-JPEG*…); EXIF GPS position,
+  capture time and camera model are extracted, and for FLIR-format pictures
+  the camera model, serial number and lens from the FLIR data as well.
+- **🌡 Radiometric file…** imports temperature files whose extension alone
+  would route them to the Metashape library: Autel 640T radiometric `.tif`
+  files and per-pixel temperature `.csv` matrices exported from a vendor tool
+  (header lines, a leading row-index column, decimal commas, missing cells
+  and kelvin values are handled). A `.tif` or `.csv` chosen through *Import
+  photos / videos* that decodes as a thermal frame in °C — a small,
+  ungeoreferenced single-band TIFF in tenths of a kelvin, or a numeric
+  matrix of at least 64×48 values — is filed as radiometric automatically;
+  anything else stays a Metashape export. Native drag & drop skips `.csv`
+  files so flight logs are never swallowed. The temperatures are kept as a
+  raster next to the file and a palette-rendered preview stands in for the
+  undisplayable original.
 - Files are copied into the active profile's data folder and deduplicated by
   SHA-256 hash.
 - Videos are playable in the viewer; use **Capture frame** to turn the current
@@ -62,7 +94,9 @@ At runtime the app searches for `libdirp.dll` / `libdirp.so` in this order:
 
 ### Analysis
 
-- Per-pixel temperature matrix via `dirp_measure_ex` (°C, float precision).
+- Per-pixel temperature matrix (°C, float precision): `dirp_measure_ex` for
+  DJI files, the native Planck model for FLIR-format files, the stored
+  raster for TIFF/CSV imports.
 - Statistics: min/max (with in-image markers), mean, median, standard
   deviation, ΔT and a histogram.
 - Six palettes (Iron Red, White Hot, Black Hot, Rainbow, Arctic, Medical) with

@@ -6,17 +6,21 @@
  */
 
 import { useThermalStore } from '@/stores/thermalStore';
-import type { ThermalReport } from '@/types/thermal';
+import { hasMeasurementParams, type ThermalReport } from '@/types/thermal';
 import { NumField, inputCls, labelCls, smallBtnCls, type SectionProps } from '../types';
 
 export function ConditionsActions({ update, setNotice }: SectionProps<ThermalReport>) {
   const analysis = useThermalStore((s) => s.analysis);
-  const valueSuffix = useThermalStore((s) => s.valueSuffix);
+  const assets = useThermalStore((s) => s.assets);
+  const selectedAssetId = useThermalStore((s) => s.selectedAssetId);
+  const selected = assets.find((a) => a.id === selectedAssetId) ?? null;
   const apply = () => {
-    // A vegetation index is "measurable" too, but its analysis carries no
-    // camera parameters (they come back as zeros)
-    if (!analysis || valueSuffix === '') {
-      setNotice('Select a radiometric thermal picture first — the parameters are read from its analysis.');
+    // Vegetation indices and TIFF/CSV temperature imports carry no camera
+    // parameters (their analysis reports zeros)
+    if (!analysis || !selected || !hasMeasurementParams(selected)) {
+      setNotice(
+        'Select a DJI or FLIR-format radiometric picture first — the parameters are read from its analysis. TIFF/CSV imports carry none; take them from the vendor tool.',
+      );
       return;
     }
     const p = analysis.params;
