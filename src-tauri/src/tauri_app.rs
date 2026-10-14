@@ -40,6 +40,19 @@
     }
 
     impl AppState {
+        /// An unlocked state over an already opened database — what the
+        /// integration tests drive the commands through (the app itself
+        /// builds its state in `run`, honouring the profile lock).
+        #[doc(hidden)]
+        #[allow(dead_code)]
+        pub fn new_unlocked(db: Database, data_dir: PathBuf) -> Self {
+            AppState {
+                active_db: RwLock::new(Arc::new(db)),
+                data_dir,
+                locked: RwLock::new(false),
+            }
+        }
+
         /// Get a reference-counted handle to the current database (unchecked — for internal/close-hook use).
         pub fn db(&self) -> Arc<Database> {
             self.active_db.read().unwrap().clone()

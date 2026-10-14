@@ -152,29 +152,27 @@ export class PdfWriter implements ReportWriter {
     this.y += 4.5;
   }
 
+  /** Label column + value column. A label longer than its column wraps
+   *  inside it instead of running under the value ("Reflected (Background)
+   *  Temperature", "Ground Sampling Distance (GSD)"). */
   kv(key: string, value: string, _edit?: EditRef, options?: KvOptions): void {
     const { doc } = this;
-    if (options?.compact) {
-      this.checkPage(5);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8);
-      doc.setTextColor(0, 0, 0);
-      doc.text(`${key}: `, this.margin, this.y);
-      doc.setFont('helvetica', 'normal');
-      const lines = doc.splitTextToSize(value || '—', this.contentW - 30) as string[];
-      doc.text(lines, this.margin + 30, this.y);
-      this.y += Math.max(4, lines.length * 4);
-      return;
-    }
-    this.checkPage(6);
+    const compact = !!options?.compact;
+    const valueX = compact ? 30 : 48;
+    const lineH = compact ? 4 : 5;
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+    doc.setFontSize(compact ? 8 : 10);
     doc.setTextColor(0, 0, 0);
-    doc.text(`${key}:`, this.margin, this.y);
+    const labelLines = doc.splitTextToSize(`${key}:`, valueX - 2) as string[];
     doc.setFont('helvetica', 'normal');
-    const lines = doc.splitTextToSize(value || '—', this.contentW - 48) as string[];
-    doc.text(lines, this.margin + 48, this.y);
-    this.y += Math.max(5, lines.length * 5);
+    const lines = doc.splitTextToSize(value || '—', this.contentW - valueX) as string[];
+    const rows = Math.max(1, lines.length, labelLines.length);
+    this.checkPage(rows * lineH + 1);
+    doc.setFont('helvetica', 'bold');
+    doc.text(labelLines, this.margin, this.y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(lines, this.margin + valueX, this.y);
+    this.y += rows * lineH;
   }
 
   link(url: string): void {

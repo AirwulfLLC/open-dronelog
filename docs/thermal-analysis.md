@@ -422,6 +422,32 @@ The SDK zip ships with sample R-JPEGs. After running the setup script they are
 in `deps/dji_thermal_sdk/dataset/` (H20T and M3T). Import any `DJI_*_R.JPG`
 from there to exercise the full pipeline without a drone.
 
+## Testing with FLIR sample data
+
+Teledyne FLIR's free [ADAS thermal dataset](https://oem.flir.com/solutions/automotive/adas-dataset-form/)
+(Tau 2 640×512) exercises the SDK-free paths. Its 8-bit JPEGs carry no
+radiometric data and import as plain pictures; its 16-bit `analyticsData`
+TIFFs are T-linear sensor counts, which the importer refuses as temperatures
+(they sit outside the Autel tenths-of-kelvin window) and files as a
+Metashape raster. Converted to °C — `°C = count × 0.04 − 273.15` for the
+high-gain T-linear output — they make realistic radiometric TIFF and CSV
+imports. `src-tauri/tests/flir_adas_smoke.rs` does exactly that and drives
+every thermal command against the result (import classification, analysis,
+temperature matrix, anomaly detection, band math, annotations, networks,
+solver, AI settings, reports, bundles, rename/notes/delete). It is skipped
+unless the dataset is present:
+
+```powershell
+$env:ODL_FLIR_ADAS_DIR = "D:\Thermal_Photos\FLIR_DATASET"   # extracted dataset
+$env:ODL_SMOKE_OUT = "D:\Thermal_Photos\smoke_samples"      # generated °C files + results table
+$env:ODL_FLIR_SAMPLE = "C:\path\to\a\FLIR_R-JPEG.jpg"       # optional: a real FLIR camera file
+cargo test --test flir_adas_smoke -- --nocapture
+```
+
+The generated `celsius_*.tif`, `kelvin_*.tif`, `celsius_*.csv` / `.txt` and
+`preview_*.png` files in the output folder can be dragged into the studio to
+try the same imports by hand.
+
 ## Architecture notes
 
 - `src-tauri/src/thermal/sdk.rs` — runtime FFI bindings (`libloading`) to

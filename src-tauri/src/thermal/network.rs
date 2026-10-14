@@ -580,6 +580,9 @@ pub fn solve(net: &ThermalNetwork, opts: &SolveOptions) -> Result<SolveResult, S
         }
     }
 
+    if opts.mode != "steady" && opts.mode != "transient" {
+        return Err(format!("Unknown solve mode '{}' (expected steady or transient)", opts.mode));
+    }
     if opts.mode == "steady" {
         let cap_over_dt = vec![0.0f64; p.unknowns.len()];
         let prev_k = temps_k.clone();

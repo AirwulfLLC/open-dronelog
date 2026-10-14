@@ -112,6 +112,8 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dev-dependencies]
 tempfile = "3"
+# Mock runtime for the command-level integration test (tests/flir_adas_smoke.rs)
+tauri = { version = "2", features = ["test"] }
 
 [profile.release]
 # The dji-log-parser library can panic on truncated/corrupted log files,

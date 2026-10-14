@@ -20,6 +20,11 @@ pub mod session_store;
 #[cfg(feature = "tauri-app")]
 mod tauri_app;
 
+/// The desktop app state, exposed for the integration tests that drive the
+/// Tauri commands directly (see `tests/flir_adas_smoke.rs`).
+#[cfg(feature = "tauri-app")]
+pub use tauri_app::AppState;
+
 #[cfg(feature = "tauri-app")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

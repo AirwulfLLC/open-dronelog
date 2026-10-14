@@ -10,6 +10,13 @@ fn main() {
     // Only run tauri_build when the tauri-app feature is enabled
     #[cfg(feature = "tauri-app")]
     tauri_build::build();
+
+    // Test executables (`cargo test`) link the Tauri runtime as well, and the
+    // Windows loader then needs the Common-Controls v6 manifest tauri-build
+    // embeds into the app binary (TaskDialogIndirect lives in comctl32 v6);
+    // without it a test binary fails to start with STATUS_ENTRYPOINT_NOT_FOUND.
+    #[cfg(feature = "tauri-app")]
+    embed_test_manifest();
 }
 
 fn ensure_default_icon() {
@@ -34,4 +41,31 @@ fn ensure_default_icon() {
         }
         Err(error) => eprintln!("Failed to decode default icon: {}", error),
     }
+}
+
+/// Common-Controls v6 manifest for MSVC test executables (see `main`).
+#[cfg(feature = "tauri-app")]
+fn embed_test_manifest() {
+    let windows_msvc = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if !windows_msvc {
+        return;
+    }
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let path = Path::new(&out_dir).join("test.manifest");
+    const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>
+"#;
+    if let Err(error) = fs::write(&path, MANIFEST) {
+        eprintln!("Failed to write the test manifest: {}", error);
+        return;
+    }
+    println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}", path.display());
 }
