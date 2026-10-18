@@ -65,3 +65,6 @@ DJI+Thermal+Analysis+Tool*.exe
 
 # Add-on installer build intermediates
 installers/addons/.build/
+
+# Claude Code local notes
+CLAUDE.local.md

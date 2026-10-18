@@ -1,0 +1,6 @@
+# Tauri commands that intentionally have no axum route in server.rs (desktop-only).
+# One name or glob per line; '#' starts a comment. Audited by:
+#   node .claude/skills/backend-command/scripts/parity-check.mjs
+addons_*        # add-on manager: reads %APPDATA%\com.drone-logbook\addons on the desktop
+thermal_*       # Thermal Studio add-on: DJI Thermal SDK and local files
+*_bytes         # raw-body IPC variants (Android/desktop); web mode uploads via multipart routes
