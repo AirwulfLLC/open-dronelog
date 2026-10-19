@@ -8,13 +8,24 @@
  * - Videos: playable element with a "capture frame" helper.
  *
  * An SVG annotation layer sits on top for drawing arrows, text, freehand,
- * circles and rectangles in image-pixel coordinates.
+ * circles and rectangles in image-pixel coordinates. The whole surface can be
+ * zoomed and panned (see `useZoomPan`); pointer positions map through the
+ * overlay's on-screen box, so every tool works at any zoom.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useThermalStore } from '@/stores/thermalStore';
 import { formatTemp, renderTempsToImageData } from '@/lib/thermalPalettes';
-import { NetworkLayer, hitTestConductor, hitTestNode } from './NetworkLayer';
+import { CLICK_ZOOM_STEP, useZoomPan } from '@/hooks/useZoomPan';
+import {
+  NetworkLayer,
+  eraseNetworkAt,
+  hitTestConductor,
+  hitTestNode,
+  linkConductor,
+  nextConductorId,
+  nextNodeId,
+} from './NetworkLayer';
 import {
   AnnotationShape,
   eraseAt,
@@ -57,8 +68,6 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
     networkResult,
     selectedNetElement,
     setNetwork,
-    addNetNode,
-    addNetConductor,
     selectNetElement,
     removeNetElement,
     valueSuffix,
@@ -72,6 +81,8 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
 
   const [cursorInfo, setCursorInfo] = useState<{ x: number; y: number; temp: number } | null>(null);
   const [fitted, setFitted] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  /** Container client size — the zoomed surface is kept inside it. */
+  const [cbox, setCbox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [draft, setDraft] = useState<DraftAnnotation | null>(null);
   const [selectedAnnId, setSelectedAnnId] = useState<string | null>(null);
   const [textInput, setTextInput] = useState<{ x: number; y: number; value: string } | null>(null);
@@ -98,9 +109,15 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
     nodeOrig?: { x: number; y: number };
     /** Set once a moveNode drag actually displaces the node. */
     moved?: boolean;
-    /** Set once an erase drag actually removed something. */
+    /** Set once an erase drag actually removed an annotation. */
     erased?: boolean;
+    /** Set once an erase drag actually removed a node or conductor. */
+    erasedNet?: boolean;
   } | null>(null);
+
+  // Zoom & pan of the display surface (local: the component is keyed by
+  // asset id, so a new asset always opens at fit)
+  const zp = useZoomPan(containerRef, fitted, cbox);
 
   const isRadiometric = asset.isRadiometric && matrix != null;
   const isVideo = asset.assetType === 'video';
@@ -133,6 +150,7 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
     const el = containerRef.current;
     if (!el) return;
     const compute = () => {
+      setCbox({ w: el.clientWidth, h: el.clientHeight });
       const cw = el.clientWidth - 16;
       const ch = el.clientHeight - 16;
       if (cw <= 0 || ch <= 0) return;
@@ -256,15 +274,30 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
           false,
         );
       } else if (drag.mode === 'erase') {
+        const radius = eraserRadiusFor(dims.w);
         const current = useThermalStore.getState().annotations;
-        const next = eraseAt(current, pt, eraserRadiusFor(dims.w));
+        const next = eraseAt(current, pt, radius);
         if (next !== current) {
           drag.erased = true;
           setAnnotations(next, false); // persisted once on pointer up
         }
+        // Heat-flow nodes go with their conductors; a conductor alone goes too
+        const net = useThermalStore.getState().network;
+        const nextNet = eraseNetworkAt(net, pt, radius, dims.w);
+        if (nextNet !== net) {
+          drag.erasedNet = true;
+          setNetwork(nextNet, false); // persisted once on pointer up
+          const sel = useThermalStore.getState().selectedNetElement;
+          const stillThere =
+            sel == null ||
+            (sel.type === 'node'
+              ? nextNet.nodes.some((n) => n.id === sel.id)
+              : nextNet.conductors.some((c) => c.id === sel.id));
+          if (!stillThere) selectNetElement(null);
+        }
       }
     },
-    [setAnnotations, setNetwork, dims.w],
+    [setAnnotations, setNetwork, selectNetElement, dims.w],
   );
 
   // ---- Cursor temperature readout ----
@@ -358,6 +391,9 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
         commitTextInput();
         return;
       }
+      // Middle/right buttons and the Zoom tool belong to the viewer surface
+      // (pan / zoom click, see handleViewMouseDown), not to the tools
+      if (e.button !== 0 || annotationTool === 'zoom') return;
       if (annotationTool === 'text') {
         setTextInput({ x: pt.x, y: pt.y, value: '' });
         return;
@@ -369,12 +405,26 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
         return;
       }
       if (annotationTool === 'node') {
+        // An existing dot is selected (and can be dragged), never covered by
+        // a new one
+        const existing = hitTestNode(network, pt, dims.w);
+        if (existing) {
+          selectNetElement({ type: 'node', id: existing.id });
+          setSelectedAnnId(null);
+          dragRef.current = {
+            mode: 'moveNode',
+            startX: pt.x,
+            startY: pt.y,
+            nodeId: existing.id,
+            nodeOrig: { x: existing.x, y: existing.y },
+          };
+          setDragActive(true);
+          return;
+        }
         // Place a heat-flow node, sampling the measured temperature when
         // available. Vegetation-index values are NOT temperatures — nodes on
         // index assets seed with a neutral default instead.
         const net = useThermalStore.getState().network;
-        let idx = 1;
-        while (net.nodes.some((n) => n.id === `N${idx}`)) idx++;
         let t0 = 20;
         if (isRadiometric && matrix && valueSuffix !== '') {
           const px = Math.min(matrix.width - 1, Math.floor(pt.x));
@@ -385,7 +435,7 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
           }
         }
         const node: NetNode = {
-          id: `N${idx}`,
+          id: nextNodeId(net),
           label: '',
           x: pt.x,
           y: pt.y,
@@ -395,7 +445,16 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
           source: null,
           boundaryTempC: null,
         };
-        addNetNode(node);
+        // Successive dots form a chain: the new node is linked to the one
+        // placed before it. Shift places an unlinked node (a new chain).
+        const prev = net.nodes[net.nodes.length - 1];
+        const conductors =
+          prev && !e.shiftKey
+            ? [...net.conductors, linkConductor(nextConductorId(net), prev.id, node.id)]
+            : net.conductors;
+        setNetwork({ nodes: [...net.nodes, node], conductors });
+        selectNetElement({ type: 'node', id: node.id });
+        setSelectedAnnId(null);
         return;
       }
       if (annotationTool === 'conductor') {
@@ -447,7 +506,7 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
       }
       beginDraw(pt);
     },
-    [annotationTool, annotations, beginDraw, dims, eventToImage, isRadiometric, matrix, network, addNetNode, selectNetElement, valueSuffix, textInput, commitTextInput, handleDragMove],
+    [annotationTool, annotations, beginDraw, dims, eventToImage, isRadiometric, matrix, network, setNetwork, selectNetElement, valueSuffix, textInput, commitTextInput, handleDragMove],
   );
 
   const handlePointerUp = useCallback(() => {
@@ -479,16 +538,9 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
         // Parallel conductors between the same pair are legitimate
         // (e.g. conduction + radiation), so only self-links are rejected.
         if (target && target.id !== cd.fromId) {
-          let idx = 1;
-          while (net.conductors.some((c) => c.id === `G${idx}`)) idx++;
-          addNetConductor({
-            id: `G${idx}`,
-            label: '',
-            from: cd.fromId,
-            to: target.id,
-            kind: 'linear',
-            value: { mode: 'constant', value: 1 },
-          });
+          const id = nextConductorId(net);
+          setNetwork({ ...net, conductors: [...net.conductors, linkConductor(id, cd.fromId, target.id)] });
+          selectNetElement({ type: 'conductor', id });
         }
       }
     } else if (drag.mode === 'moveNode') {
@@ -497,12 +549,58 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
         setNetwork(useThermalStore.getState().network, true);
       }
     } else if (drag.mode === 'erase') {
-      // One write for the whole erase stroke
+      // One write per store for the whole erase stroke
       if (drag.erased) {
         setAnnotations(useThermalStore.getState().annotations, true);
       }
+      if (drag.erasedNet) {
+        setNetwork(useThermalStore.getState().network, true);
+      }
     }
-  }, [draft, setAnnotations, conductorDraft, dims.w, addNetConductor, setNetwork]);
+  }, [draft, setAnnotations, conductorDraft, dims.w, setNetwork, selectNetElement]);
+
+  // The Zoom tool and the middle button act on the whole viewer surface (the
+  // overlay hands these presses up): a Zoom-tool press pans, or zooms about
+  // the point when it does not travel (Shift zooms out); a middle-button press
+  // pans with any tool — also over a video in pass-through mode.
+  const { beginPan } = zp;
+  const handleViewMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (dragRef.current) return;
+      // A press while a label is being typed only commits the label (the
+      // overlay's handler), never a zoom click as well
+      if (textInput) return;
+      // Presses on the controls over the surface (zoom strip, Capture frame,
+      // the text input) are theirs — neither a pan nor a zoom click
+      if ((e.target as Element).closest('button, input, select, textarea, a')) return;
+      const middle = e.button === 1;
+      const zoomTool = annotationTool === 'zoom' && e.button === 0;
+      if (!middle && !zoomTool) return;
+      // No Windows middle-click autoscroll, text selection or focus move
+      e.preventDefault();
+      beginPan(e.clientX, e.clientY, zoomTool ? (e.shiftKey ? 'out' : 'in') : null, e.button);
+    },
+    [annotationTool, beginPan, textInput],
+  );
+
+  // Shift held with the Zoom tool means "zoom out": show it in the cursor
+  const [shiftHeld, setShiftHeld] = useState(false);
+  useEffect(() => {
+    if (annotationTool !== 'zoom') {
+      setShiftHeld(false);
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => setShiftHeld(e.shiftKey);
+    const onBlur = () => setShiftHeld(false);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [annotationTool]);
 
   // Delete key removes the selected network element or annotation; Escape
   // deselects (the only way to deselect over a video, where empty areas pass
@@ -565,18 +663,28 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
       {/* Viewer surface */}
       <div
         ref={containerRef}
-        className="flex-1 min-h-0 flex items-center justify-center bg-black/40 relative overflow-hidden"
+        className="flex-1 min-h-0 bg-black/40 relative overflow-hidden"
+        style={{ touchAction: 'none', cursor: zp.panning ? 'grabbing' : undefined }}
+        onMouseDown={handleViewMouseDown}
       >
+        {/* The surface at fitted × zoom, kept inside the container by the clamp
+            (centred at 1×, edges pinned once larger than the container) */}
         <div
-          className="relative"
-          style={{ width: fitted.w || undefined, height: fitted.h || undefined }}
+          className="absolute left-0 top-0"
+          style={{
+            width: zp.W || undefined,
+            height: zp.H || undefined,
+            transform: `translate3d(${zp.ox}px, ${zp.oy}px, 0)`,
+          }}
         >
           <div className="absolute inset-0">
             {isRadiometric ? (
               <canvas
                 ref={canvasRef}
                 className="w-full h-full block select-none"
-                style={{ imageRendering: dims.w < 400 ? 'pixelated' : 'auto' }}
+                // Crisp pixels for small matrices, and for any matrix once it is
+                // magnified to 3+ screen pixels per thermal pixel
+                style={{ imageRendering: dims.w < 400 || zp.W / dims.w >= 3 ? 'pixelated' : 'auto' }}
               />
             ) : isVideo ? (
               <video
@@ -618,14 +726,19 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
                 preserveAspectRatio="none"
                 className="absolute inset-0 w-full h-full"
                 style={{
-                  cursor:
-                    annotationTool === 'select'
-                      ? 'default'
-                      : annotationTool === 'text'
-                        ? 'text'
-                        : annotationTool === 'eraser'
-                          ? 'none' // the eraser ring below is the cursor
-                          : 'crosshair',
+                  cursor: zp.panning
+                    ? 'grabbing'
+                    : annotationTool === 'zoom'
+                      ? shiftHeld
+                        ? 'zoom-out'
+                        : 'zoom-in'
+                      : annotationTool === 'select'
+                        ? 'default'
+                        : annotationTool === 'text'
+                          ? 'text'
+                          : annotationTool === 'eraser'
+                            ? 'none' // the eraser ring below is the cursor
+                            : 'crosshair',
                   touchAction: 'none',
                   pointerEvents: passThrough ? 'none' : 'auto',
                 }}
@@ -746,6 +859,47 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
           </div>
         </div>
 
+        {/* Zoom controls — the wheel and the Zoom tool do the same. The strip
+            lets strokes pass while one is being drawn under it, so a stroke
+            crossing it is not cut short by the overlay's mouseleave */}
+        <div
+          className={`absolute top-3 left-3 flex items-center rounded-lg bg-black/70 border border-gray-700 text-xs text-white ${
+            dragActive || zp.panning ? 'pointer-events-none' : ''
+          }`}
+        >
+          <button
+            onClick={() => zp.zoomBy(1 / CLICK_ZOOM_STEP)}
+            disabled={!zp.canZoomOut}
+            className="px-2 py-1 hover:text-drone-primary disabled:opacity-40 disabled:hover:text-white"
+            title="Zoom out"
+          >
+            −
+          </button>
+          <button
+            onClick={zp.reset}
+            className="px-1.5 py-1 font-mono tabular-nums min-w-[3.5rem] hover:text-drone-primary"
+            title="Fit to window"
+          >
+            {Math.round(zp.zoom * 100)}%
+          </button>
+          <button
+            onClick={() => zp.zoomBy(CLICK_ZOOM_STEP)}
+            disabled={!zp.canZoomIn}
+            className="px-2 py-1 hover:text-drone-primary disabled:opacity-40 disabled:hover:text-white"
+            title="Zoom in"
+          >
+            +
+          </button>
+          <button
+            onClick={zp.reset}
+            disabled={!zp.canZoomOut}
+            className="px-2 py-1 border-l border-gray-700 hover:text-drone-primary disabled:opacity-40 disabled:hover:text-white"
+            title="Fit to window (100%)"
+          >
+            Fit
+          </button>
+        </div>
+
         {/* Cursor readout */}
         {cursorInfo && (
           <div className="absolute bottom-3 left-3 px-2.5 py-1.5 rounded-lg bg-black/70 border border-gray-700 text-xs text-white font-mono pointer-events-none">
@@ -753,11 +907,14 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
           </div>
         )}
 
-        {/* Video frame capture */}
+        {/* Video frame capture — lets strokes pass while one is being drawn,
+            like the zoom strip */}
         {isVideo && onCaptureFrame && (
           <button
             onClick={captureFrame}
-            className="absolute top-3 right-3 px-3 py-1.5 rounded-lg bg-drone-primary/90 hover:bg-drone-primary text-white text-xs font-medium"
+            className={`absolute top-3 right-3 px-3 py-1.5 rounded-lg bg-drone-primary/90 hover:bg-drone-primary text-white text-xs font-medium ${
+              dragActive || zp.panning ? 'pointer-events-none' : ''
+            }`}
             title="Capture the current video frame as a new image asset"
           >
             Capture frame

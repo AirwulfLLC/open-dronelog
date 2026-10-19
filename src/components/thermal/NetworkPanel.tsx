@@ -352,7 +352,9 @@ export function NetworkPanel() {
     return (
       <p className="text-[11px] text-gray-500">
         Use the <b>Node</b> tool to place computation points on the image (they sample
-        the measured temperature), then connect them with the <b>Link</b> tool.
+        the measured temperature); each new node is linked to the previous one — hold
+        Shift to start a new chain, or add links with the <b>Link</b> tool. Remove nodes
+        and links with the <b>Erase</b> tool, or Select + Delete.
         Conductors model conduction/convection (Fourier: q = G·ΔT) or radiation
         exchange (q = σ·εFA·(T₁⁴−T₂⁴)); nodes can have mass (m·cp), sources, or be
         held as boundaries.

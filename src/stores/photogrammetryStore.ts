@@ -16,7 +16,7 @@ import { getSettingValue, setSettingValue } from '@/lib/api';
 import { makeDebouncedPersister } from '@/lib/debouncedPersister';
 import { useThermalStore } from '@/stores/thermalStore';
 
-/** Drawing tools available on photogrammetry media (no heat-flow network). */
+/** Tools available on photogrammetry media: drawing tools and zoom, no heat-flow network. */
 export type PhotoTool = Exclude<AnnotationTool, 'node' | 'conductor'>;
 
 /** Profile-scoped setting holding the report queue between sessions. */

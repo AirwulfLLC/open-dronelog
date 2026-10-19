@@ -8,10 +8,14 @@
  * remain visible) but in Select mode only the drawn shapes take the pointer,
  * so clicks on empty areas reach the player. The current frame can be queued
  * for the report or captured as a new photo.
+ *
+ * The surface can be zoomed and panned (see `useZoomPan`); pointer positions
+ * map through the overlay's on-screen box, so every tool works at any zoom.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePhotogrammetryStore } from '@/stores/photogrammetryStore';
+import { CLICK_ZOOM_STEP, useZoomPan } from '@/hooks/useZoomPan';
 import {
   AnnotationShape,
   eraseAt,
@@ -52,6 +56,8 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const [fitted, setFitted] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  /** Container client size — the zoomed surface is kept inside it. */
+  const [cbox, setCbox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [draft, setDraft] = useState<Annotation | null>(null);
   const [selectedAnnId, setSelectedAnnId] = useState<string | null>(null);
@@ -71,6 +77,10 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
     /** Set once an erase drag actually removed something. */
     erased?: boolean;
   } | null>(null);
+
+  // Zoom & pan of the display surface (local: the component is keyed by
+  // asset id, so a new asset always opens at fit)
+  const zp = useZoomPan(containerRef, fitted, cbox);
 
   const isVideo = asset.assetType === 'video';
 
@@ -93,6 +103,7 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
     const el = containerRef.current;
     if (!el) return;
     const compute = () => {
+      setCbox({ w: el.clientWidth, h: el.clientHeight });
       const cw = el.clientWidth - 16;
       const ch = el.clientHeight - 16;
       if (cw <= 0 || ch <= 0) return;
@@ -247,6 +258,9 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
         commitTextInput();
         return;
       }
+      // Middle/right buttons and the Zoom tool belong to the viewer surface
+      // (pan / zoom click, see handleViewMouseDown), not to the tools
+      if (e.button !== 0 || annotationTool === 'zoom') return;
       if (annotationTool === 'text') {
         setTextInput({ x: pt.x, y: pt.y, value: '' });
         return;
@@ -292,6 +306,49 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
       }
     }
   }, [draft, setAnnotations]);
+
+  // The Zoom tool and the middle button act on the whole viewer surface (the
+  // overlay hands these presses up): a Zoom-tool press pans, or zooms about
+  // the point when it does not travel (Shift zooms out); a middle-button press
+  // pans with any tool — also over a video in pass-through mode.
+  const { beginPan } = zp;
+  const handleViewMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (dragRef.current || !assetUrl) return;
+      // A press while a label is being typed only commits the label (the
+      // overlay's handler), never a zoom click as well
+      if (textInput) return;
+      // Presses on the controls over the surface (zoom strip, frame buttons,
+      // the text input) are theirs — neither a pan nor a zoom click
+      if ((e.target as Element).closest('button, input, select, textarea, a')) return;
+      const middle = e.button === 1;
+      const zoomTool = annotationTool === 'zoom' && e.button === 0;
+      if (!middle && !zoomTool) return;
+      // No Windows middle-click autoscroll, text selection or focus move
+      e.preventDefault();
+      beginPan(e.clientX, e.clientY, zoomTool ? (e.shiftKey ? 'out' : 'in') : null, e.button);
+    },
+    [annotationTool, assetUrl, beginPan, textInput],
+  );
+
+  // Shift held with the Zoom tool means "zoom out": show it in the cursor
+  const [shiftHeld, setShiftHeld] = useState(false);
+  useEffect(() => {
+    if (annotationTool !== 'zoom') {
+      setShiftHeld(false);
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => setShiftHeld(e.shiftKey);
+    const onBlur = () => setShiftHeld(false);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [annotationTool]);
 
   // Delete/Backspace removes the selected annotation (outside text fields);
   // Escape deselects — the only way over a video, where empty areas pass the
@@ -354,6 +411,8 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
       <div
         ref={containerRef}
         className="flex-1 min-h-0 flex items-center justify-center bg-black/40 relative overflow-hidden"
+        style={{ touchAction: 'none', cursor: zp.panning ? 'grabbing' : undefined }}
+        onMouseDown={handleViewMouseDown}
       >
         {!assetUrl ? (
           isLoadingAsset ? (
@@ -364,9 +423,15 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
             </span>
           )
         ) : (
+          // The surface at fitted × zoom, kept inside the container by the
+          // clamp (centred at 1×, edges pinned once larger than the container)
           <div
-            className="relative"
-            style={{ width: fitted.w || undefined, height: fitted.h || undefined }}
+            className="absolute left-0 top-0"
+            style={{
+              width: zp.W || undefined,
+              height: zp.H || undefined,
+              transform: `translate3d(${zp.ox}px, ${zp.oy}px, 0)`,
+            }}
           >
             <div className="absolute inset-0">
               {isVideo ? (
@@ -411,14 +476,19 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
                 preserveAspectRatio="none"
                 className="absolute inset-0 w-full h-full"
                 style={{
-                  cursor:
-                    annotationTool === 'select'
-                      ? 'default'
-                      : annotationTool === 'text'
-                        ? 'text'
-                        : annotationTool === 'eraser'
-                          ? 'none' // the eraser ring below is the cursor
-                          : 'crosshair',
+                  cursor: zp.panning
+                    ? 'grabbing'
+                    : annotationTool === 'zoom'
+                      ? shiftHeld
+                        ? 'zoom-out'
+                        : 'zoom-in'
+                      : annotationTool === 'select'
+                        ? 'default'
+                        : annotationTool === 'text'
+                          ? 'text'
+                          : annotationTool === 'eraser'
+                            ? 'none' // the eraser ring below is the cursor
+                            : 'crosshair',
                   touchAction: 'none',
                   pointerEvents: passThrough ? 'none' : 'auto',
                 }}
@@ -475,26 +545,78 @@ export function PhotoViewer({ asset, assetUrl, onCaptureFrame, onAddFrame, onVid
           </div>
         )}
 
-        {/* Video frame actions */}
-        {isVideo && assetUrl && (onAddFrame || onCaptureFrame) && (
-          <div className="absolute top-3 right-3 flex gap-1.5">
-            {onAddFrame && (
+        {/* Controls over the surface: the zoom strip (the wheel and the Zoom
+            tool do the same) and, for videos, the frame actions. One wrapping
+            row, so the frame buttons drop under the strip when the viewer is
+            narrow instead of covering it; while a stroke is being drawn the
+            controls let the pointer pass, so a stroke crossing them is not cut
+            short by the overlay's mouseleave */}
+        {assetUrl && (
+          <div className="absolute top-3 left-3 right-3 flex flex-wrap items-start justify-between gap-1.5 pointer-events-none">
+            <div
+              className={`flex items-center rounded-lg bg-black/70 border border-gray-700 text-xs text-white ${
+                dragActive || zp.panning ? 'pointer-events-none' : 'pointer-events-auto'
+              }`}
+            >
               <button
-                onClick={() => onAddFrame(videoRef.current?.currentTime ?? videoTime)}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600/90 hover:bg-emerald-600 text-white text-xs font-medium"
-                title="Queue the frame at the current playback position for the report"
+                onClick={() => zp.zoomBy(1 / CLICK_ZOOM_STEP)}
+                disabled={!zp.canZoomOut}
+                className="px-2 py-1 hover:text-drone-primary disabled:opacity-40 disabled:hover:text-white"
+                title="Zoom out"
               >
-                + Add frame {fmtFrameTime(videoTime)} to report
+                −
               </button>
-            )}
-            {onCaptureFrame && (
               <button
-                onClick={captureFrame}
-                className="px-3 py-1.5 rounded-lg bg-drone-primary/90 hover:bg-drone-primary text-white text-xs font-medium"
-                title="Save the current video frame as a new photo in the library"
+                onClick={zp.reset}
+                className="px-1.5 py-1 font-mono tabular-nums min-w-[3.5rem] hover:text-drone-primary"
+                title="Fit to window"
               >
-                Capture frame
+                {Math.round(zp.zoom * 100)}%
               </button>
+              <button
+                onClick={() => zp.zoomBy(CLICK_ZOOM_STEP)}
+                disabled={!zp.canZoomIn}
+                className="px-2 py-1 hover:text-drone-primary disabled:opacity-40 disabled:hover:text-white"
+                title="Zoom in"
+              >
+                +
+              </button>
+              <button
+                onClick={zp.reset}
+                disabled={!zp.canZoomOut}
+                className="px-2 py-1 border-l border-gray-700 hover:text-drone-primary disabled:opacity-40 disabled:hover:text-white"
+                title="Fit to window (100%)"
+              >
+                Fit
+              </button>
+            </div>
+
+            {/* Video frame actions */}
+            {isVideo && (onAddFrame || onCaptureFrame) && (
+              <div
+                className={`flex gap-1.5 ml-auto ${
+                  dragActive || zp.panning ? 'pointer-events-none' : 'pointer-events-auto'
+                }`}
+              >
+                {onAddFrame && (
+                  <button
+                    onClick={() => onAddFrame(videoRef.current?.currentTime ?? videoTime)}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600/90 hover:bg-emerald-600 text-white text-xs font-medium"
+                    title="Queue the frame at the current playback position for the report"
+                  >
+                    + Add frame {fmtFrameTime(videoTime)} to report
+                  </button>
+                )}
+                {onCaptureFrame && (
+                  <button
+                    onClick={captureFrame}
+                    className="px-3 py-1.5 rounded-lg bg-drone-primary/90 hover:bg-drone-primary text-white text-xs font-medium"
+                    title="Save the current video frame as a new photo in the library"
+                  >
+                    Capture frame
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}

@@ -1,5 +1,5 @@
 {
-  "sourceFingerprint": "71f24d483b316bbef437c87ac430231db26a01027923dec2afd08895de4fbd41",
+  "sourceFingerprint": "bbe07e51744ed4d0a093e2dd94a917cd40fb83da00625d653a134fc2ae79234a",
   "crate": "open-dronelog",
   "dependencies": [
     "anyhow",

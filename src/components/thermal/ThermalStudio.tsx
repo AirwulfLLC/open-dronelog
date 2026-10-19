@@ -30,14 +30,30 @@ import type { AnnotationTool, ThermalAsset } from '@/types/thermal';
 
 const TOOLS: Array<{ key: AnnotationTool; label: string; icon: string; title: string }> = [
   { key: 'select', label: 'Select', icon: '↖', title: 'Select / move annotations and nodes (Del to remove)' },
+  {
+    key: 'zoom',
+    label: 'Zoom',
+    icon: '🔍',
+    title: 'Zoom — click to zoom in, Shift+click to zoom out, drag to pan. With any tool the mouse wheel zooms and a middle-button drag pans; Fit resets.',
+  },
   { key: 'arrow', label: 'Arrow', icon: '→', title: 'Draw arrow' },
   { key: 'line', label: 'Line', icon: '╲', title: 'Draw straight line' },
   { key: 'circle', label: 'Circle', icon: '◯', title: 'Draw ellipse' },
   { key: 'rect', label: 'Box', icon: '▭', title: 'Draw rectangle' },
   { key: 'freehand', label: 'Draw', icon: '✎', title: 'Freehand drawing' },
   { key: 'text', label: 'Text', icon: 'T', title: 'Add text label (click, type, Enter)' },
-  { key: 'eraser', label: 'Erase', icon: '⌫', title: 'Eraser — drag over annotations to remove them (freehand strokes are cut, shapes and labels removed)' },
-  { key: 'node', label: 'Node', icon: '⬤', title: 'Place a heat-flow computation node (samples image temperature)' },
+  {
+    key: 'eraser',
+    label: 'Erase',
+    icon: '⌫',
+    title: 'Eraser — drag over annotations to remove them (freehand strokes are cut, shapes and labels removed); heat-flow nodes and links under it are removed too',
+  },
+  {
+    key: 'node',
+    label: 'Node',
+    icon: '⬤',
+    title: 'Place a heat-flow computation node (samples image temperature). Each new node is linked to the previous one — hold Shift to start a new chain. Click a node to select it (Del removes it).',
+  },
   { key: 'conductor', label: 'Link', icon: '⌁', title: 'Connect two nodes with a conductor (drag node → node)' },
 ];
 

@@ -25,8 +25,10 @@ function uniqueSorted(values) {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
 
+// Line endings are normalised so a checkout that converts to CRLF (Windows
+// autocrlf) fingerprints the same source as one that keeps LF.
 function hashText(text) {
-  return crypto.createHash('sha256').update(text).digest('hex');
+  return crypto.createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex');
 }
 
 function parseCargoDependencies(cargoToml) {

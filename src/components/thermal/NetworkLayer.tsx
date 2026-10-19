@@ -11,17 +11,36 @@ import type {
   ThermalNetworkModel,
 } from '@/types/thermal';
 
+type Point = { x: number; y: number };
+
+/** Radius of a node's dot in image pixels for a surface `dimsW` pixels wide. */
 export function nodeRadius(dimsW: number): number {
-  return Math.max(7, dimsW / 55);
+  return Math.max(5, dimsW / 79);
+}
+
+/** Pointer tolerance around a dot — wider than the dot so it stays easy to pick. */
+function nodeHitRadius(dimsW: number): number {
+  return nodeRadius(dimsW) * 2.3;
+}
+
+/** Pointer tolerance around a conductor's line. */
+function conductorHitTolerance(dimsW: number): number {
+  return Math.max(5, dimsW / 80);
+}
+
+/** Distance from `pt` to the segment a–b. */
+function distToSegment(pt: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(pt.x - (a.x + t * dx), pt.y - (a.y + t * dy));
 }
 
 /** Find the topmost node within hit radius of a point (image coordinates). */
-export function hitTestNode(
-  network: ThermalNetworkModel,
-  pt: { x: number; y: number },
-  dimsW: number,
-): NetNode | null {
-  const r = nodeRadius(dimsW) * 1.6;
+export function hitTestNode(network: ThermalNetworkModel, pt: Point, dimsW: number): NetNode | null {
+  const r = nodeHitRadius(dimsW);
   for (let i = network.nodes.length - 1; i >= 0; i--) {
     const n = network.nodes[i];
     if (Math.hypot(n.x - pt.x, n.y - pt.y) <= r) return n;
@@ -32,25 +51,67 @@ export function hitTestNode(
 /** Find a conductor whose segment passes near the point. */
 export function hitTestConductor(
   network: ThermalNetworkModel,
-  pt: { x: number; y: number },
+  pt: Point,
   dimsW: number,
 ): NetConductor | null {
-  const tol = Math.max(5, dimsW / 80);
+  const tol = conductorHitTolerance(dimsW);
   const byId = new Map(network.nodes.map((n) => [n.id, n]));
   for (let i = network.conductors.length - 1; i >= 0; i--) {
     const c = network.conductors[i];
     const a = byId.get(c.from);
     const b = byId.get(c.to);
     if (!a || !b) continue;
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len2 = dx * dx + dy * dy;
-    let t = len2 === 0 ? 0 : ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / len2;
-    t = Math.max(0, Math.min(1, t));
-    const d = Math.hypot(pt.x - (a.x + t * dx), pt.y - (a.y + t * dy));
-    if (d < tol) return c;
+    if (distToSegment(pt, a, b) < tol) return c;
   }
   return null;
+}
+
+/** Next free node id (N1, N2, …). */
+export function nextNodeId(network: ThermalNetworkModel): string {
+  let idx = 1;
+  while (network.nodes.some((n) => n.id === `N${idx}`)) idx++;
+  return `N${idx}`;
+}
+
+/** Next free conductor id (G1, G2, …). */
+export function nextConductorId(network: ThermalNetworkModel): string {
+  let idx = 1;
+  while (network.conductors.some((c) => c.id === `G${idx}`)) idx++;
+  return `G${idx}`;
+}
+
+/** The default link between two nodes: a linear conductor of 1 W/K (edited in the panel). */
+export function linkConductor(id: string, from: string, to: string): NetConductor {
+  return { id, label: '', from, to, kind: 'linear', value: { mode: 'constant', value: 1 } };
+}
+
+/**
+ * Apply the eraser to the network at `pt` (image coordinates, eraser radius
+ * in image pixels): a node whose dot lies within the eraser goes together
+ * with its conductors; a conductor whose line passes under the eraser goes
+ * alone. Returns the input object when nothing was touched, so callers can
+ * skip re-rendering and persisting.
+ */
+export function eraseNetworkAt(
+  network: ThermalNetworkModel,
+  pt: Point,
+  radius: number,
+  dimsW: number,
+): ThermalNetworkModel {
+  const reach = radius + nodeRadius(dimsW);
+  const gone = new Set(
+    network.nodes.filter((n) => Math.hypot(n.x - pt.x, n.y - pt.y) <= reach).map((n) => n.id),
+  );
+  const byId = new Map(network.nodes.map((n) => [n.id, n]));
+  const conductors = network.conductors.filter((c) => {
+    if (gone.has(c.from) || gone.has(c.to)) return false;
+    const a = byId.get(c.from);
+    const b = byId.get(c.to);
+    if (!a || !b) return true;
+    return distToSegment(pt, a, b) > radius;
+  });
+  if (gone.size === 0 && conductors.length === network.conductors.length) return network;
+  return { nodes: network.nodes.filter((n) => !gone.has(n.id)), conductors };
 }
 
 export function formatWatts(q: number): string {
@@ -74,6 +135,8 @@ export function NetworkLayer({ network, result, selected, dims, conductorDraft }
   if (network.nodes.length === 0 && !conductorDraft) return null;
 
   const r = nodeRadius(dims.w);
+  // Flow arrowheads keep their size; only the node dots were made smaller
+  const arrowR = Math.max(7, dims.w / 55);
   const fs = Math.max(10, dims.w / 55);
   const byId = new Map(network.nodes.map((n) => [n.id, n]));
 
@@ -110,7 +173,7 @@ export function NetworkLayer({ network, result, selected, dims, conductorDraft }
           const mx = (a.x + b.x) / 2;
           const my = (a.y + b.y) / 2;
           const ang = Math.atan2(tx.y - sx.y, tx.x - sx.x);
-          const ah = Math.max(6, r * 0.9) + width * 1.5;
+          const ah = Math.max(6, arrowR * 0.9) + width * 1.5;
           arrow = (
             <polygon
               points={`${mx + ah * Math.cos(ang)},${my + ah * Math.sin(ang)} ${mx + ah * Math.cos(ang + 2.6)},${my + ah * Math.sin(ang + 2.6)} ${mx + ah * Math.cos(ang - 2.6)},${my + ah * Math.sin(ang - 2.6)}`}

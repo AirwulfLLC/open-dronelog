@@ -157,13 +157,19 @@ analysis panel for computing radiation exchange between surfaces and
 representing heat flow paths between computation points:
 
 - **Nodes** — place with the **Node** tool; each samples the measured image
-  temperature as its starting value. Three kinds:
+  temperature as its starting value, and each new node is linked to the one
+  placed before it (hold **Shift** to start a new, unlinked chain). Clicking an
+  existing node with the Node tool selects it. Remove a node with the **Erase**
+  tool, with Select + Delete, or with the 🗑 button in the panel; its
+  conductors go with it. Three kinds:
   - *Diffusion*: has thermal mass m·cp (J/K) — implements transient heat
     diffusion `m·cp·dT/dt = Σq + Q` (the lumped form of
     `ρcp ∂T/∂t = ∇·(k∇T) + q‴`);
   - *Arithmetic*: massless, instantaneous heat balance;
   - *Boundary*: prescribed temperature (ambient is the typical boundary).
-- **Conductors** — drag with the **Link** tool between two nodes:
+- **Conductors** — created automatically between successive nodes, or drawn
+  with the **Link** tool between any two nodes (parallel conductors are
+  allowed); erased like nodes:
   - *Linear*: `q = G·(T₁−T₂)` (Fourier conduction `kA/L`, or convection `hA`);
   - *Radiative*: `q = σ·εFA·(T₁⁴−T₂⁴)` (radiation exchange; εFA in m²).
 - **Sources** — heater power, electrical dissipation, solar/environmental
@@ -184,11 +190,17 @@ representing heat flow paths between computation points:
 
 Arrow, straight line, text, freehand, ellipse and rectangle tools, an **eraser** (drag over
 annotations: shapes and labels are removed whole, freehand strokes are cut
-where the eraser passes and split into the remaining pieces), select/move,
-undo, clear, and Delete-key removal. Colors come from preset swatches or a
-**custom color** picker (the rainbow swatch opens the system color dialog;
-recent custom colors are kept as extra swatches). Annotations persist per
-asset in the profile database and are baked into report exports.
+where the eraser passes and split into the remaining pieces; heat-flow nodes
+and links under it are removed too), select/move, undo, clear, and Delete-key
+removal. Colors come from preset swatches or a **custom color** picker (the
+rainbow swatch opens the system color dialog; recent custom colors are kept as
+extra swatches). Annotations persist per asset in the profile database and are
+baked into report exports.
+
+**Zoom** (🔍) magnifies the picture up to 10×: click zooms in about the cursor,
+Shift+click zooms out, dragging pans. With any tool the mouse wheel zooms about
+the cursor and a middle-button drag pans; the −/+/Fit controls in the picture's
+corner do the same. Every tool works at any zoom, and exports are unaffected.
 
 **📝 Note** attaches a free-text note to the selected picture (any library).
 It is printed under the picture wherever it appears in a report — under a
@@ -212,8 +224,8 @@ survey report. It has its own library of photos (`.jpg`/`.png`) and videos
 (`.mp4`/`.mov`/`.avi`) kept separate from the thermal assets, plus the Agisoft
 Metashape deliverables (orthomosaic GeoTIFFs, processing PDFs, camera
 XML/CSV, point clouds, KML/KMZ — shared with the Thermal Studio), all imported
-by file dialog or drag-and-drop; the same annotation tools as the Thermal
-Studio; and a **Report images** queue:
+by file dialog or drag-and-drop; the same annotation and **Zoom** tools as the
+Thermal Studio; and a **Report images** queue:
 
 - **Select and add** — check one or more library items (or just select one)
   and press **Add to report**; each becomes a numbered figure. The queue

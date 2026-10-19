@@ -29,6 +29,12 @@ import {
 
 const TOOLS: Array<{ key: PhotoTool; label: string; icon: string; title: string }> = [
   { key: 'select', label: 'Select', icon: '↖', title: 'Select / move annotations (Del to remove)' },
+  {
+    key: 'zoom',
+    label: 'Zoom',
+    icon: '🔍',
+    title: 'Zoom — click to zoom in, Shift+click to zoom out, drag to pan. With any tool the mouse wheel zooms and a middle-button drag pans; Fit resets.',
+  },
   { key: 'arrow', label: 'Arrow', icon: '→', title: 'Draw arrow' },
   { key: 'line', label: 'Line', icon: '╲', title: 'Draw straight line' },
   { key: 'circle', label: 'Circle', icon: '◯', title: 'Draw ellipse' },

@@ -299,11 +299,13 @@ export type AnnotationTool =
   | 'rect'
   | 'eraser'
   | 'node'
-  | 'conductor';
+  | 'conductor'
+  /** Magnifier: click / wheel to zoom, drag to pan (a view mode, draws nothing). */
+  | 'zoom';
 
 export interface AnnotationBase {
   id: string;
-  type: Exclude<AnnotationTool, 'select' | 'eraser' | 'node' | 'conductor'>;
+  type: Exclude<AnnotationTool, 'select' | 'eraser' | 'node' | 'conductor' | 'zoom'>;
   color: string;
   strokeWidth: number;
 }
