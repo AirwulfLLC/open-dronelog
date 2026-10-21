@@ -13,13 +13,22 @@ import type {
   NetNode,
   NetworkSolveOptions,
   NetworkSolveResult,
+  NodeDotSize,
   TempMatrix,
   ThermalAnalysis,
   ThermalAsset,
   ThermalNetworkModel,
   ThermalSdkStatus,
 } from '@/types/thermal';
-import { EMPTY_NETWORK, hasDisplayableImage, previewMimeType, valueSuffixFor } from '@/types/thermal';
+import {
+  EMPTY_NETWORK,
+  NODE_DOT_SIZE_SETTING_KEY,
+  hasDisplayableImage,
+  isNodeDotSize,
+  previewMimeType,
+  valueSuffixFor,
+} from '@/types/thermal';
+import { getSettingValue, setSettingValue } from '@/lib/api';
 import * as thermalApi from '@/lib/thermalApi';
 import type { AssetSourceOverride } from '@/lib/thermalApi';
 import { makeDebouncedPersister } from '@/lib/debouncedPersister';
@@ -58,6 +67,8 @@ interface ThermalState {
   selectedNetElement: { type: 'node' | 'conductor'; id: string } | null;
   /** Unit suffix for measured values ('°C', or '' for vegetation indices). */
   valueSuffix: string;
+  /** Size of the heat-flow node dots on the image (a profile setting). */
+  nodeDotSize: NodeDotSize;
 
   loadSdkStatus: () => Promise<void>;
   loadAssets: () => Promise<void>;
@@ -77,6 +88,9 @@ interface ThermalState {
   setIsotherm: (enabled: boolean, low?: number, high?: number, mode?: 'highlight' | 'solo') => void;
   setAnnotationTool: (tool: AnnotationTool) => void;
   setAnnotationStyle: (color?: string, strokeWidth?: number) => void;
+  setNodeDotSize: (size: NodeDotSize) => void;
+  /** Read the stored dot size (the studio does this on mount). */
+  loadNodeDotSize: () => Promise<void>;
   setAnnotations: (annotations: Annotation[], persist?: boolean) => void;
   /** Write pending annotation edits; resolves once they are in the database. */
   flushAnnotations: () => Promise<void>;
@@ -159,6 +173,7 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
   isSolving: false,
   selectedNetElement: null,
   valueSuffix: '°C',
+  nodeDotSize: 'normal',
 
   loadSdkStatus: async () => {
     try {
@@ -418,6 +433,22 @@ export const useThermalStore = create<ThermalState>((set, get) => ({
       annotationColor: color ?? s.annotationColor,
       annotationStrokeWidth: strokeWidth ?? s.annotationStrokeWidth,
     })),
+
+  setNodeDotSize: (size) => {
+    set({ nodeDotSize: size });
+    void setSettingValue(NODE_DOT_SIZE_SETTING_KEY, size).catch((e) => {
+      console.warn('Could not store the node dot size:', e);
+    });
+  },
+
+  loadNodeDotSize: async () => {
+    try {
+      const stored = await getSettingValue(NODE_DOT_SIZE_SETTING_KEY);
+      if (isNodeDotSize(stored)) set({ nodeDotSize: stored });
+    } catch {
+      // a display preference; the default is fine
+    }
+  },
 
   setAnnotations: (annotations, persist = true) => {
     set({ annotations });

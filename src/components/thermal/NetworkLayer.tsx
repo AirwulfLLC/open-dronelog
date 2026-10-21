@@ -8,14 +8,19 @@ import type {
   NetConductor,
   NetNode,
   NetworkSolveResult,
+  NodeDotSize,
   ThermalNetworkModel,
 } from '@/types/thermal';
+import { NODE_DOT_SCALE } from '@/types/thermal';
 
 type Point = { x: number; y: number };
 
-/** Radius of a node's dot in image pixels for a surface `dimsW` pixels wide. */
-export function nodeRadius(dimsW: number): number {
-  return Math.max(5, dimsW / 79);
+/** Radius of a node's dot in image pixels for a surface `dimsW` pixels wide,
+ *  at the chosen dot size (Large is the reference; Normal and Small are half
+ *  and a quarter of it). Hit testing and erasing use the Large radius so a
+ *  small dot stays as easy to pick. */
+export function nodeRadius(dimsW: number, size: NodeDotSize = 'large'): number {
+  return Math.max(5, dimsW / 79) * NODE_DOT_SCALE[size];
 }
 
 /** Pointer tolerance around a dot — wider than the dot so it stays easy to pick. */
@@ -129,12 +134,14 @@ interface Props {
   dims: { w: number; h: number };
   /** Rubber-band conductor being drawn (image coordinates). */
   conductorDraft: { x1: number; y1: number; x2: number; y2: number } | null;
+  /** Size of the node dots (Large / Normal / Small). */
+  dotSize: NodeDotSize;
 }
 
-export function NetworkLayer({ network, result, selected, dims, conductorDraft }: Props) {
+export function NetworkLayer({ network, result, selected, dims, conductorDraft, dotSize }: Props) {
   if (network.nodes.length === 0 && !conductorDraft) return null;
 
-  const r = nodeRadius(dims.w);
+  const r = nodeRadius(dims.w, dotSize);
   // Flow arrowheads keep their size; only the node dots were made smaller
   const arrowR = Math.max(7, dims.w / 55);
   const fs = Math.max(10, dims.w / 55);

@@ -80,6 +80,7 @@ export function ThermalStudio() {
     setAnnotations,
     setAssetNotes,
     renameAsset,
+    loadNodeDotSize,
   } = useThermalStore();
 
   const [showReportBuilder, setShowReportBuilder] = useState(false);
@@ -111,9 +112,13 @@ export function ThermalStudio() {
   }, [loadSdkStatus, loadAssets, assetsLoaded]);
 
   // The report builder opens later from here; a new report starts from the
-  // thermographer's details of the last one
+  // thermographer's details of the last one. The node dot size is a stored
+  // preference too.
   useEffect(() => {
-    if (isThermalSupported()) void loadThermalReportDefaults();
+    if (isThermalSupported()) {
+      void loadThermalReportDefaults();
+      void loadNodeDotSize();
+    }
   }, []);
 
   // Metashape assets are shared with the Photogrammetry tab, which may have

@@ -375,6 +375,26 @@ export interface PropValue {
 
 export type NetNodeKind = 'diffusion' | 'arithmetic' | 'boundary';
 
+/** Size of the node dots drawn on the image; Large is the reference size. */
+export type NodeDotSize = 'large' | 'normal' | 'small';
+
+export const NODE_DOT_SIZES: NodeDotSize[] = ['large', 'normal', 'small'];
+
+/** Dot radius relative to Large. */
+export const NODE_DOT_SCALE: Record<NodeDotSize, number> = { large: 1, normal: 0.5, small: 0.25 };
+
+export const NODE_DOT_SIZE_LABELS: Record<NodeDotSize, string> = {
+  large: 'Large',
+  normal: 'Normal',
+  small: 'Small',
+};
+
+export const NODE_DOT_SIZE_SETTING_KEY = 'thermal_node_dot_size';
+
+export function isNodeDotSize(value: unknown): value is NodeDotSize {
+  return typeof value === 'string' && (NODE_DOT_SIZES as string[]).includes(value);
+}
+
 export interface NetNode {
   id: string;
   label: string;

@@ -161,7 +161,10 @@ representing heat flow paths between computation points:
   placed before it (hold **Shift** to start a new, unlinked chain). Clicking an
   existing node with the Node tool selects it. Remove a node with the **Erase**
   tool, with Select + Delete, or with the 🗑 button in the panel; its
-  conductors go with it. Three kinds:
+  conductors go with it. The **Dot size** selector in the heat-flow panel
+  draws the dots Large, Normal (half) or Small (a quarter); the choice is
+  kept with the profile, and dots stay as easy to pick at every size. Three
+  kinds:
   - *Diffusion*: has thermal mass m·cp (J/K) — implements transient heat
     diffusion `m·cp·dT/dt = Σq + Q` (the lumped form of
     `ρcp ∂T/∂t = ∇·(k∇T) + q‴`);

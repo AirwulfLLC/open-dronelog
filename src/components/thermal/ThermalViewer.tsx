@@ -71,6 +71,7 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
     selectNetElement,
     removeNetElement,
     valueSuffix,
+    nodeDotSize,
   } = useThermalStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -832,6 +833,7 @@ export function ThermalViewer({ asset, onCaptureFrame }: Props) {
                     selected={selectedNetElement}
                     dims={dims}
                     conductorDraft={conductorDraft}
+                    dotSize={nodeDotSize}
                   />
                 </g>
               </svg>

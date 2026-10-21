@@ -10,6 +10,7 @@ import { useMemo, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { useThermalStore } from '@/stores/thermalStore';
 import { formatWatts } from './NetworkLayer';
+import { NODE_DOT_SCALE, NODE_DOT_SIZES, NODE_DOT_SIZE_LABELS } from '@/types/thermal';
 import type {
   NetConductor,
   NetNode,
@@ -293,6 +294,8 @@ export function NetworkPanel() {
     selectedNetElement,
     selectNetElement,
     setNetwork,
+    nodeDotSize,
+    setNodeDotSize,
   } = useThermalStore();
 
   const [mode, setMode] = useState<'steady' | 'transient'>('steady');
@@ -411,6 +414,26 @@ export function NetworkPanel() {
         >
           {isSolving ? 'Solving…' : 'Solve'}
         </button>
+      </div>
+
+      {/* Dot size of the nodes on the image: Large is the reference size,
+          Normal half of it, Small a quarter (a profile setting) */}
+      <div className="flex items-center gap-1 text-[10px] text-gray-500 mb-1.5">
+        <span className="mr-1">Dot size</span>
+        {NODE_DOT_SIZES.map((size) => (
+          <button
+            key={size}
+            onClick={() => setNodeDotSize(size)}
+            className={`px-1.5 py-0.5 rounded border transition-colors ${
+              nodeDotSize === size
+                ? 'border-drone-primary bg-drone-primary/20 text-white'
+                : 'border-gray-700 text-gray-400 hover:text-white'
+            }`}
+            title={`Draw the node dots ${NODE_DOT_SIZE_LABELS[size].toLowerCase()} (${Math.round(NODE_DOT_SCALE[size] * 100)}% of Large)`}
+          >
+            {NODE_DOT_SIZE_LABELS[size]}
+          </button>
+        ))}
       </div>
 
       <div className="text-[10px] text-gray-500 mb-2">
